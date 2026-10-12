@@ -1,0 +1,30 @@
+id: D-02
+version: "1.0"
+name: Excluded provider billing (OIG LEIE)
+reason_code: R-102
+family: D
+type: hard
+owner: NeXari compliance
+phase: Prototype
+data: [oig_leie, claims]
+description: Billing, rendering, ordering or certifying NPI matches an LEIE exclusion and the service date is after the exclusion date (and before any reinstatement).
+params: {min_lines: 1}
+reason: >-
+  {{ n_lines }} claim lines on {{ n_dates }} date{{ 's' if n_dates != 1 }} after this provider was excluded by OIG on
+  {{ excl_date|mdy }} ({{ excl_type }}). Identity link: {{ basis }} (confidence {{ '%.2f'|format(confidence) }}).
+sql: |
+  WITH m AS (
+    SELECT x.npi, x.confidence, x.basis, e.excl_id, e.excl_date, e.rein_date, e.excl_type, e.source, e._version, e._row
+    FROM exclusion_matches x JOIN exclusions e USING (excl_id) WHERE e.source = 'oig_leie'),
+  hits AS (
+    SELECT r.npi, m.excl_id, m.excl_date, m.excl_type, m.confidence, m.basis, m.source, m._version AS v, m._row AS rw,
+           count(*) AS n_lines, count(DISTINCT r.service_date) AS n_dates, min(r.service_date) AS event_date,
+           list(r.line_id ORDER BY r.service_date, r.line_id)[1:50] AS evidence_claims
+    FROM claim_roles r JOIN m ON m.npi = r.npi
+    WHERE r.service_date > m.excl_date AND (m.rein_date IS NULL OR r.service_date < m.rein_date)
+    GROUP BY ALL HAVING count(*) >= {{ p.min_lines }})
+  SELECT * EXCLUDE (source, v, rw),
+         [{'source': source, 'version': v, 'row': rw,
+           'note': 'excluded ' || strftime(excl_date, '%m/%d/%Y') || ' (' || excl_type || ')'}] AS evidence_sources
+  FROM hits
+  QUALIFY row_number() OVER (PARTITION BY npi ORDER BY confidence DESC, excl_date) = 1

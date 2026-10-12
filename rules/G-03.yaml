@@ -1,0 +1,31 @@
+id: G-03
+version: "1.1"
+name: Impossible travel
+reason_code: R-603
+family: G
+type: soft
+weight: 600
+owner: NeXari compliance
+phase: Prototype
+data: [claims]
+description: In-person services in locations too far apart to reach on the same service date.
+params: {miles: 300}
+reason: >-
+  In-person services in {{ city_a }} and {{ city_b }} ({{ '%.0f'|format(max_miles) }} miles apart) on {{ n_days }} of the same
+  service dates; {{ shared_patients }} patients appear in both places on the same day.
+sql: |
+  WITH dc AS (
+    SELECT rendering_npi AS npi, service_date, svc_city, any_value(lat) AS lat, any_value(lon) AS lon,
+           list(line_id ORDER BY line_id) AS lines, list(DISTINCT patient_id) AS pts
+    FROM claims WHERE pos IN ('11', '22') AND lat IS NOT NULL GROUP BY ALL),
+  pairs AS (
+    SELECT a.npi, a.service_date, a.svc_city AS city_a, b.svc_city AS city_b,
+           miles(a.lat, a.lon, b.lat, b.lon) AS dist, a.lines || b.lines AS lines,
+           len(list_intersect(a.pts, b.pts)) AS shared
+    FROM dc a JOIN dc b ON a.npi = b.npi AND a.service_date = b.service_date AND a.svc_city < b.svc_city
+    WHERE miles(a.lat, a.lon, b.lat, b.lon) > {{ p.miles }})
+  SELECT npi, any_value(city_a) AS city_a, any_value(city_b) AS city_b, max(dist) AS max_miles,
+         count(DISTINCT service_date) AS n_days, sum(shared) AS shared_patients, min(service_date) AS event_date,
+         flatten(list(lines ORDER BY service_date, city_a, city_b))[1:50] AS evidence_claims,
+         []::STRUCT(source VARCHAR, version DATE, "row" BIGINT, note VARCHAR)[] AS evidence_sources
+  FROM pairs GROUP BY npi

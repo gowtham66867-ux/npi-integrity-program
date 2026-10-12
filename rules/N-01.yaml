@@ -1,0 +1,26 @@
+id: N-01
+version: "1.0"
+name: Link to excluded entity
+reason_code: R-701
+family: N
+type: soft
+weight: 600
+owner: NeXari compliance
+phase: MVP (pulled into prototype for scenario 12)
+data: [nppes_full, oig_leie, sam_exclusions]
+description: Organization's authorized official matches an excluded person. Strong when the identity match is confirmed; weak (watch only) on a name-only match.
+params: {strong_confidence: 0.9, weak_strength: 0.4}
+reason: >-
+  Authorized official {{ official }} matches an {{ 'OIG' if source == 'oig_leie' else 'SAM' }} exclusion dated {{ excl_date|mdy }}
+  ({{ basis }}, confidence {{ '%.2f'|format(confidence) }}){{ '' if strength == 1 else '; name-only match, needs identity review' }}.
+sql: |
+  SELECT m.org_npi AS npi, m.official, m.confidence, m.basis, e.excl_date, e.source,
+         CASE WHEN m.confidence >= {{ p.strong_confidence }} THEN 1.0 ELSE {{ p.weak_strength }} END AS strength,
+         NULL::DATE AS event_date, []::VARCHAR[] AS evidence_claims,
+         [{'source': e.source, 'version': e._version, 'row': e._row,
+           'note': 'excluded ' || strftime(e.excl_date, '%m/%d/%Y')},
+          {'source': pr.profile_src, 'version': pr.profile_version, 'row': NULL::BIGINT,
+           'note': 'authorized official ' || m.official}] AS evidence_sources
+  FROM official_matches m JOIN exclusions e USING (excl_id) JOIN providers pr ON pr.npi = m.org_npi
+  WHERE e.rein_date IS NULL OR e.rein_date > {{ AS_OF }}
+  QUALIFY row_number() OVER (PARTITION BY m.org_npi ORDER BY m.confidence DESC) = 1

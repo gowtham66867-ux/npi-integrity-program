@@ -1,0 +1,27 @@
+name: Synthetic release checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -e '.[dev]'
+      - run: node --check npi_integrity/static/app.js
+      - run: python -m npi_integrity.cli demo
+      - run: python scripts/release_check.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-report
+          path: release_reports/
+          retention-days: 14

@@ -1,0 +1,28 @@
+id: D-01
+version: "1.1"
+name: Billing after NPI deactivation
+reason_code: R-101
+family: D
+type: hard
+owner: NeXari compliance
+phase: Prototype
+data: [nppes_deactivation, nppes_weekly, claims]
+description: Claim service date inside a deactivation window - after the deactivation date and before any later reactivation (deactivated NPIs drop out of the API, so the monthly report is read directly). v1.1 also catches billing during the window of an NPI that was later reactivated.
+params: {min_lines: 1}
+reason: >-
+  Claims for {{ n_dates }} service date{{ 's' if n_dates != 1 }} billed after this NPI was deactivated on {{ deact_date|mdy }}
+  ({{ n_lines }} claim lines, first {{ event_date|mdy }}){{ '; the NPI was reactivated on ' ~ (react_date|mdy) ~ ', and only claims before that date are counted' if react_date }}.
+sql: |
+  WITH hits AS (
+    SELECT r.npi, d.deact_date, d.react_date, d.source, d._version AS v, d._row AS rw,
+           count(DISTINCT r.service_date) AS n_dates, count(*) AS n_lines, min(r.service_date) AS event_date,
+           list(r.line_id ORDER BY r.service_date, r.line_id)[1:50] AS evidence_claims
+    FROM claim_roles r
+    JOIN deactivations d ON d.npi = r.npi
+    WHERE r.role IN ('billing', 'rendering') AND r.service_date > d.deact_date
+      AND (d.react_date IS NULL OR r.service_date < d.react_date)
+    GROUP BY ALL HAVING count(*) >= {{ p.min_lines }})
+  SELECT npi, deact_date, react_date, n_dates, n_lines, event_date, evidence_claims,
+         [{'source': source, 'version': v, 'row': rw,
+           'note': 'NPI deactivated ' || strftime(deact_date, '%m/%d/%Y')}] AS evidence_sources
+  FROM hits

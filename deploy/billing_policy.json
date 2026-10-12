@@ -1,0 +1,20 @@
+{
+  "expected_identity": "gowtham@texmed.us",
+  "forbidden_card_last4": [
+    "6022"
+  ],
+  "approved_project": "texmed-npi-integrity",
+  "approved_billing_account": "01E4B3-EA09E1-258E11",
+  "approved_organization": "267783416603",
+  "approved_primary_card_last4": "8192",
+  "payment_methods_verified_at": "2026-10-07T16:46:37+00:00",
+  "payment_methods_verified_by": "gowtham@texmed.us",
+  "active_payment_method_last4": [
+    "8192"
+  ],
+  "payment_verification_source": "google_cloud_payment_methods_console",
+  "max_verification_age_hours": 24,
+  "region": "us-central1",
+  "observed_billing_account_for_approved_card": "01E4B3-EA09E1-258E11",
+  "observed_billing_account_organization": "wanologicalsolution.com"
+}

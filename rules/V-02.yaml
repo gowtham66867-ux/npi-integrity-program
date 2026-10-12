@@ -1,0 +1,34 @@
+id: V-02
+version: "1.0"
+name: Peer volume outlier
+reason_code: R-412
+family: V
+type: soft
+weight: 200
+owner: NeXari compliance
+phase: Prototype
+data: [medicare_by_provider]
+description: Annual Medicare services above the 99th percentile of peers (provider type x state). Peer groups under the minimum size roll up to national.
+params: {quantile: 0.99, min_peers: 30, min_multiple_of_median: 2.0}
+reason: >-
+  {{ '{:,.0f}'.format(services) }} Medicare services in the latest annual file, above the 99th percentile of
+  {{ peer_n }} {{ provider_type }} peers ({{ peer_level }}: {{ '{:,.0f}'.format(p99) }}; median {{ '{:,.0f}'.format(med) }}).
+sql: |
+  WITH m AS (SELECT * FROM medicare_by_provider WHERE services IS NOT NULL),
+  st AS (SELECT provider_type, state, count(*) AS n, quantile_cont(services, {{ p.quantile }}) AS p99,
+                median(services) AS med FROM m GROUP BY ALL),
+  nat AS (SELECT provider_type, count(*) AS n, quantile_cont(services, {{ p.quantile }}) AS p99,
+                 median(services) AS med FROM m GROUP BY ALL),
+  x AS (
+    SELECT m.npi, m.provider_type, m.services, m._version, m._row,
+           CASE WHEN st.n >= {{ p.min_peers }} THEN 'state peers' ELSE 'national peers (state group too small)' END AS peer_level,
+           CASE WHEN st.n >= {{ p.min_peers }} THEN st.p99 ELSE nat.p99 END AS p99,
+           CASE WHEN st.n >= {{ p.min_peers }} THEN st.med ELSE nat.med END AS med,
+           CASE WHEN st.n >= {{ p.min_peers }} THEN st.n ELSE nat.n END AS peer_n
+    FROM m JOIN st USING (provider_type, state) JOIN nat USING (provider_type)
+    WHERE nat.n >= {{ p.min_peers }})
+  SELECT npi, provider_type, services, peer_level, p99, med, peer_n, NULL::DATE AS event_date,
+         []::VARCHAR[] AS evidence_claims,
+         [{'source': 'medicare_by_provider', 'version': _version, 'row': _row,
+           'note': services::BIGINT || ' services'}] AS evidence_sources
+  FROM x WHERE services > p99 AND services > {{ p.min_multiple_of_median }} * med

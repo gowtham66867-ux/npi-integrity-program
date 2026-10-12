@@ -1,0 +1,9 @@
+.venv/
+data/
+__pycache__/
+*.pyc
+.pytest_cache/
+.claude/
+release_reports/
+evals/reports/
+.DS_Store

@@ -1,0 +1,22 @@
+id: I-03
+version: "1.0"
+name: Profile churn
+reason_code: R-203
+family: I
+type: soft
+weight: 250
+owner: NeXari compliance
+phase: Prototype
+data: [nppes_weekly]
+description: Several changes to practice address, taxonomy, or authorized official in a short window.
+params: {window_days: 90, min_changes: 3}
+reason: >-
+  {{ n_changes }} NPPES profile changes in {{ p.window_days }} days: {{ changes|join('; ') }}.
+sql: |
+  SELECT npi, count(*) AS n_changes, min(change_date) AS event_date,
+         list(field || ' changed ' || strftime(change_date, '%m/%d/%Y') ORDER BY change_date) AS changes,
+         []::VARCHAR[] AS evidence_claims,
+         list({'source': src, 'version': change_date, 'row': _row,
+               'note': field || ': ' || coalesce(old_value, '') || ' -> ' || coalesce(new_value, '')} ORDER BY change_date) AS evidence_sources
+  FROM nppes_history WHERE change_date > {{ AS_OF }} - INTERVAL {{ p.window_days }} DAY
+  GROUP BY npi HAVING count(*) >= {{ p.min_changes }}

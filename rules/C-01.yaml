@@ -1,0 +1,32 @@
+id: C-01
+version: "1.1"
+name: Taxonomy / service mismatch
+reason_code: R-301
+family: C
+type: soft
+weight: 575
+owner: NeXari compliance
+phase: Prototype
+data: [nppes_full, claims]
+description: A meaningful share of codes billed fall outside the families expected for the NPI's taxonomy.
+params: {window_days: 180, min_lines: 10, min_share: 0.15}
+reason: >-
+  {{ n_outside }} of {{ n_total }} lines ({{ (share * 100)|round|int }}%) in the last {{ p.window_days }} days are
+  {{ families|join(', ') }} services, outside what is expected for taxonomy {{ taxonomy_desc }}.
+sql: |
+  WITH l AS (
+    SELECT c.rendering_npi AS npi, p.taxonomy_group AS grp, p.taxonomy_desc, c.family, c.line_id, c.service_date,
+           a.family IS NULL AS outside
+    FROM claims c JOIN providers p ON p.npi = c.rendering_npi
+    LEFT JOIN ref_allowed a ON a.grp = p.taxonomy_group AND a.family = c.family
+    WHERE p.entity_type = '1' AND c.family IS NOT NULL
+      AND p.taxonomy_group IN (SELECT grp FROM ref_allowed)
+      AND c.service_date > {{ AS_OF }} - INTERVAL {{ p.window_days }} DAY)
+  SELECT npi, any_value(taxonomy_desc) AS taxonomy_desc, count(*) FILTER (outside) AS n_outside, count(*) AS n_total,
+         count(*) FILTER (outside) / count(*) AS share, list(DISTINCT family) FILTER (outside) AS families,
+         min(service_date) FILTER (outside) AS event_date,
+         (list(line_id ORDER BY service_date, line_id) FILTER (outside))[1:50] AS evidence_claims,
+         [{'source': 'nppes_full', 'version': NULL::DATE, 'row': NULL::BIGINT,
+           'note': 'taxonomy ' || any_value(taxonomy_desc)}] AS evidence_sources
+  FROM l GROUP BY npi
+  HAVING count(*) FILTER (outside) >= {{ p.min_lines }} AND count(*) FILTER (outside) / count(*) >= {{ p.min_share }}

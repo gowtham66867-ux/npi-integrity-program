@@ -1,0 +1,27 @@
+id: RPM-03
+version: "1.0"
+name: Monitored-patient count outlier
+reason_code: R-503
+family: RPM
+type: soft
+weight: 300
+owner: NeXari compliance
+phase: Prototype
+data: [claims]
+description: Peak monthly count of monitored patients per clinician far above RPM peers (robust z-score).
+params: {window_days: 120, min_z: 4.0, min_patients: 45}
+reason: >-
+  Peaked at {{ peak }} monitored patients in one month, versus a peer median of {{ '%.0f'|format(med) }}
+  (robust z = {{ '%.1f'|format(z) }} across {{ n_peers }} RPM clinicians).
+sql: |
+  WITH m AS (SELECT rendering_npi AS npi, date_trunc('month', service_date) AS m, count(DISTINCT patient_id) AS pts
+             FROM claims WHERE hcpcs = '99454' AND service_date > {{ AS_OF }} - INTERVAL {{ p.window_days }} DAY
+             GROUP BY ALL),
+  pk AS (SELECT npi, max(pts) AS peak FROM m GROUP BY 1),
+  st AS (SELECT median(peak) AS med, count(*) AS n_peers FROM pk),
+  mad AS (SELECT median(abs(peak - st.med)) AS mad FROM pk, st)
+  SELECT npi, peak, med, n_peers, (peak - med) / (1.4826 * greatest(mad, 1)) AS z, NULL::DATE AS event_date,
+         []::VARCHAR[] AS evidence_claims,
+         []::STRUCT(source VARCHAR, version DATE, "row" BIGINT, note VARCHAR)[] AS evidence_sources
+  FROM pk, st, mad
+  WHERE (peak - med) / (1.4826 * greatest(mad, 1)) >= {{ p.min_z }} AND peak >= {{ p.min_patients }}

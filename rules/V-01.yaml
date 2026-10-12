@@ -1,0 +1,25 @@
+id: V-01
+version: "1.2"
+name: Impossible day
+reason_code: R-411
+family: V
+type: mixed          # hard above 24 hours, soft above the threshold
+weight: 350
+owner: NeXari compliance
+phase: Prototype
+data: [claims]
+description: Sum of time-based, per-encounter service minutes for one rendering NPI on one day exceeds plausible hours. Monthly RPM management codes are excluded.
+params: {soft_minutes: 960, hard_minutes: 1440}
+reason: >-
+  Billed {{ '%.0f'|format(worst_hours) if worst_hours == worst_hours|round else '%.1f'|format(worst_hours) }} hours of time-based services on {{ worst_date|mdy }}
+  ({{ worst_lines }} claim lines){% if n_days > 1 %}; {{ n_days }} days above {{ (p.soft_minutes / 60)|int }} hours{% endif %}.
+sql: |
+  WITH d AS (
+    SELECT rendering_npi AS npi, service_date, sum(minutes * units) AS mins, count(*) AS n_lines,
+           list(line_id ORDER BY line_id) AS lines
+    FROM claims WHERE minutes IS NOT NULL GROUP BY 1, 2 HAVING sum(minutes * units) > {{ p.soft_minutes }})
+  SELECT npi, arg_max(service_date, mins) AS worst_date, max(mins) / 60.0 AS worst_hours,
+         arg_max(n_lines, mins) AS worst_lines, count(*) AS n_days, min(service_date) AS event_date,
+         max(mins) > {{ p.hard_minutes }} AS hard, arg_max(lines, mins)[1:60] AS evidence_claims,
+         []::STRUCT(source VARCHAR, version DATE, "row" BIGINT, note VARCHAR)[] AS evidence_sources
+  FROM d GROUP BY npi

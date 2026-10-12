@@ -1,0 +1,33 @@
+id: I-01
+version: "1.1"
+name: Dormant NPI reactivation
+reason_code: R-201
+family: I
+type: soft
+weight: 350
+owner: NeXari compliance
+phase: Prototype
+data: [claims]
+description: No billing for 12+ months, then sudden volume well above the NPI's own prior level.
+params: {dormant_days: 395, min_ratio: 3.0, min_lines: 60, recent_days: 180}
+reason: >-
+  No claims from {{ last_active|mmyyyy }} to {{ resume_month|mmyyyy }} ({{ gap_months }} months), then {{ after_lines }} lines in the
+  first 3 months back ({{ '%.1f'|format(ratio) }}x the prior monthly average of {{ '%.0f'|format(before_avg) }}).
+sql: |
+  WITH pm AS (SELECT npi, month, lines FROM provider_month),
+  g AS (SELECT npi, month, lag(month) OVER (PARTITION BY npi ORDER BY month) AS prev FROM pm),
+  r AS (SELECT npi, prev AS last_active, month AS resume_month FROM g
+        WHERE prev IS NOT NULL AND date_diff('day', prev, month) >= {{ p.dormant_days }}
+          AND month >= {{ AS_OF }} - INTERVAL {{ p.recent_days }} DAY),
+  s AS (
+    SELECT r.*, date_diff('month', last_active, resume_month) - 1 AS gap_months,
+      (SELECT sum(lines) FROM pm WHERE pm.npi = r.npi AND pm.month >= r.resume_month
+              AND pm.month < r.resume_month + INTERVAL 3 MONTH) AS after_lines,
+      (SELECT avg(lines) FROM pm WHERE pm.npi = r.npi AND pm.month <= r.last_active
+              AND pm.month > r.last_active - INTERVAL 12 MONTH) AS before_avg
+    FROM r)
+  SELECT s.*, (after_lines / 3.0) / before_avg AS ratio, resume_month AS event_date,
+         (SELECT list(line_id ORDER BY service_date, line_id)[1:50] FROM claims c
+          WHERE c.rendering_npi = s.npi AND c.service_date >= s.resume_month) AS evidence_claims,
+         []::STRUCT(source VARCHAR, version DATE, "row" BIGINT, note VARCHAR)[] AS evidence_sources
+  FROM s WHERE after_lines >= {{ p.min_lines }} AND (after_lines / 3.0) >= {{ p.min_ratio }} * before_avg

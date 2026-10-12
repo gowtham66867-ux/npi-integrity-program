@@ -1,0 +1,22 @@
+# Score assembly (design doc C9). Weights are expert-set placeholders for NeXari's
+# compliance team and get tuned from reviewer outcomes.
+version: "1.0"
+hard_floor: 900                 # any confirmed hard rule sets the score floor (Critical)
+hard_min_confidence: 0.9        # identity matches below this never create a hard stop
+identity_review_weight: 300     # ...they become a soft "identity review" signal instead
+alert_threshold: 550
+network_multiplier: 1.2         # applied to soft signals when linked to a confirmed exclusion
+family_caps:                    # signals from the same family are capped so one behaviour is not counted twice
+  D: 1000
+  I: 600
+  C: 600
+  G: 650
+  V: 600
+  RPM: 650
+  N: 700
+tiers:
+  - {name: Low, min: 0}
+  - {name: Watch, min: 300}
+  - {name: Elevated, min: 550}
+  - {name: High, min: 750}
+  - {name: Critical, min: 900}

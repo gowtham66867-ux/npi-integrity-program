@@ -1,0 +1,37 @@
+id: G-02
+version: "1.0"
+name: Shared or virtual address
+reason_code: R-602
+family: G
+type: soft
+weight: 560
+owner: NeXari compliance
+phase: Prototype
+data: [nppes_full, pecos_reassignment, address_types]
+description: Practice address is a virtual office / mail drop, or is shared by many unrelated NPIs across specialties. NPIs that reassign to the same group count as related.
+params: {min_unrelated: 10, min_specialties: 4, virtual_only_strength: 0.45}
+reason: >-
+  Practice address {{ address }} is shared with {{ n_npis - 1 }} other NPIs ({{ n_unrelated }} unrelated, across
+  {{ n_specialties }} specialties){{ ' and is flagged as a ' ~ address_type|lower|replace('_', ' ') if address_type }}.
+sql: |
+  WITH a AS (
+    SELECT p.address_key, p.npi, p.taxonomy_group, coalesce(r.group_enrollment_id, p.npi) AS cluster
+    FROM providers p LEFT JOIN reassignments r ON r.npi = p.npi
+    WHERE p.entity_type = '1' AND p.status = 'Active' AND p.address_key IS NOT NULL),
+  agg AS (SELECT address_key, count(DISTINCT npi) AS n_npis, count(DISTINCT cluster) AS n_unrelated,
+                 count(DISTINCT taxonomy_group) AS n_specialties FROM a GROUP BY 1),
+  hits AS (
+    SELECT DISTINCT a.npi, a.address_key, agg.n_npis, agg.n_unrelated, agg.n_specialties, t.address_type,
+           t._version AS tv, t._row AS tr,
+           CASE WHEN agg.n_unrelated >= {{ p.min_unrelated }} AND agg.n_specialties >= {{ p.min_specialties }}
+                THEN 1.0 ELSE {{ p.virtual_only_strength }} END AS strength
+    FROM a JOIN agg USING (address_key) LEFT JOIN address_types t USING (address_key)
+    WHERE (agg.n_unrelated >= {{ p.min_unrelated }} AND agg.n_specialties >= {{ p.min_specialties }})
+       OR t.address_type IN ('VIRTUAL_OFFICE', 'CMRA', 'MAIL_DROP'))
+  SELECT h.npi, replace(h.address_key, '|', ', ') AS address, h.n_npis, h.n_unrelated, h.n_specialties,
+         h.address_type, h.strength, pr.enum_date AS event_date, []::VARCHAR[] AS evidence_claims,
+         [{'source': pr.profile_src, 'version': pr.profile_version, 'row': NULL::BIGINT,
+           'note': 'practice address ' || replace(h.address_key, '|', ', ')}] ||
+         CASE WHEN h.address_type IS NOT NULL THEN [{'source': 'address_types', 'version': h.tv, 'row': h.tr,
+           'note': 'address type ' || h.address_type}] ELSE [] END AS evidence_sources
+  FROM hits h JOIN providers pr ON pr.npi = h.npi

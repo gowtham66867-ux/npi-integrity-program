@@ -1,0 +1,33 @@
+id: RPM-02
+version: "1.1"
+name: Monitoring never-seen patients
+reason_code: R-502
+family: RPM
+type: soft
+weight: 575
+owner: NeXari compliance
+phase: Prototype
+data: [claims]
+description: RPM started for patients with no visit (E/M) with the billing NPI or group in the prior 12 months. Only enrollments with a full 12-month lookback in the data are judged.
+params: {lookback_days: 365, min_patients: 10, min_share: 0.5}
+reason: >-
+  {{ never_seen }} of {{ n_patients }} RPM patients started since {{ first_start|mdy }} ({{ (share * 100)|round|int }}%) had no
+  office or telehealth visit with this NPI in the 12 months before monitoring began.
+sql: |
+  WITH starts AS (
+    SELECT billing_npi AS npi, patient_id, min(service_date) AS first_rpm, arg_min(line_id, strftime(service_date, '%Y%m%d') || line_id) AS first_line
+    FROM claims WHERE family = 'RPM' GROUP BY ALL),
+  eligible AS (SELECT * FROM starts
+               WHERE first_rpm >= (SELECT min(service_date) FROM claims) + INTERVAL {{ p.lookback_days }} DAY),
+  em AS (SELECT billing_npi AS npi, patient_id, list(service_date) AS dts FROM claims WHERE family = 'EM' GROUP BY ALL),
+  s AS (
+    SELECT e.*, coalesce(len(list_filter(em.dts, d -> d < e.first_rpm
+                 AND d >= e.first_rpm - INTERVAL {{ p.lookback_days }} DAY)), 0) > 0 AS seen
+    FROM eligible e LEFT JOIN em USING (npi, patient_id))
+  SELECT npi, count(*) AS n_patients, count(*) FILTER (NOT seen) AS never_seen,
+         count(*) FILTER (NOT seen) / count(*) AS share, min(first_rpm) AS first_start,
+         min(first_rpm) FILTER (NOT seen) AS event_date,
+         (list(first_line ORDER BY first_rpm, first_line) FILTER (NOT seen))[1:50] AS evidence_claims,
+         []::STRUCT(source VARCHAR, version DATE, "row" BIGINT, note VARCHAR)[] AS evidence_sources
+  FROM s GROUP BY npi
+  HAVING count(*) FILTER (NOT seen) >= {{ p.min_patients }} AND count(*) FILTER (NOT seen) / count(*) >= {{ p.min_share }}

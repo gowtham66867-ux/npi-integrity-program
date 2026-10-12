@@ -1,0 +1,26 @@
+id: G-01
+version: "1.1"
+name: Billing far from footprint
+reason_code: R-601
+family: G
+type: soft
+weight: 300
+owner: NeXari compliance
+phase: Prototype
+data: [nppes_full, nppes_practice_locations, claims]
+description: In-person services located far from every enumerated practice address (primary and secondary).
+params: {window_days: 180, miles: 150, min_lines: 5}
+reason: >-
+  {{ n_lines }} in-person lines in {{ cities|join(', ') }}, up to {{ '%.0f'|format(max_miles) }} miles from the nearest
+  enumerated practice location.
+sql: |
+  WITH c AS (SELECT * FROM claims WHERE pos IN ('11', '12', '22') AND lat IS NOT NULL
+             AND service_date > {{ AS_OF }} - INTERVAL {{ p.window_days }} DAY),
+  d AS (SELECT c.rendering_npi AS npi, c.line_id, c.service_date, c.svc_city,
+               min(miles(c.lat, c.lon, l.lat, l.lon)) AS dist
+        FROM c JOIN provider_locations l ON l.npi = c.rendering_npi AND l.lat IS NOT NULL
+        GROUP BY ALL)
+  SELECT npi, count(*) AS n_lines, max(dist) AS max_miles, list(DISTINCT svc_city) AS cities,
+         min(service_date) AS event_date, list(line_id ORDER BY service_date, line_id)[1:50] AS evidence_claims,
+         []::STRUCT(source VARCHAR, version DATE, "row" BIGINT, note VARCHAR)[] AS evidence_sources
+  FROM d WHERE dist > {{ p.miles }} GROUP BY npi HAVING count(*) >= {{ p.min_lines }}

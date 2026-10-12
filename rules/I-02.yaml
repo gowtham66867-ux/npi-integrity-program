@@ -1,0 +1,24 @@
+id: I-02
+version: "1.0"
+name: Fast ramp after enumeration
+reason_code: R-202
+family: I
+type: soft
+weight: 150
+owner: NeXari compliance
+phase: Prototype
+data: [nppes_full, claims]
+description: A newly enumerated NPI reaches top-decile volume within 90 days.
+params: {new_days: 180, window_days: 90, quantile: 0.9}
+reason: >-
+  Enumerated {{ enum_date|mdy }} and billed {{ lines }} lines in the last {{ p.window_days }} days, above the
+  {{ (p.quantile * 100)|int }}th percentile of all rendering NPIs ({{ '%.0f'|format(q) }}).
+sql: |
+  WITH v AS (SELECT rendering_npi AS npi, count(*) AS lines FROM claims
+             WHERE service_date > {{ AS_OF }} - INTERVAL {{ p.window_days }} DAY GROUP BY 1),
+  q AS (SELECT quantile_cont(lines, {{ p.quantile }}) AS q FROM v)
+  SELECT p.npi, p.enum_date, v.lines, q.q, p.enum_date AS event_date, []::VARCHAR[] AS evidence_claims,
+         [{'source': p.profile_src, 'version': p.profile_version, 'row': NULL::BIGINT,
+           'note': 'enumeration date ' || strftime(p.enum_date, '%m/%d/%Y')}] AS evidence_sources
+  FROM providers p JOIN v USING (npi), q
+  WHERE p.entity_type = '1' AND p.enum_date >= {{ AS_OF }} - INTERVAL {{ p.new_days }} DAY AND v.lines >= q.q

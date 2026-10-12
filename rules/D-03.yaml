@@ -1,0 +1,28 @@
+id: D-03
+version: "1.1"
+name: Debarred provider billing (SAM.gov)
+reason_code: R-103
+family: D
+type: hard
+owner: NeXari compliance
+phase: Prototype
+data: [sam_exclusions, claims]
+description: Same as D-02 against the SAM.gov government-wide exclusion list.
+params: {min_lines: 1}
+reason: >-
+  {{ n_lines }} claim lines after a SAM.gov exclusion effective {{ excl_date|mdy }} ({{ excl_type }}).
+  Identity link: {{ basis }} (confidence {{ '%.2f'|format(confidence) }}).
+sql: |
+  WITH m AS (
+    SELECT x.npi, x.confidence, x.basis, e.excl_date, e.excl_type, e.source, e._version, e._row
+    FROM exclusion_matches x JOIN exclusions e USING (excl_id) WHERE e.source = 'sam_exclusions'),
+  hits AS (
+    SELECT r.npi, m.excl_date, m.excl_type, m.confidence, m.basis, m.source, m._version AS v, m._row AS rw,
+           count(*) AS n_lines, min(r.service_date) AS event_date,
+           list(r.line_id ORDER BY r.service_date, r.line_id)[1:50] AS evidence_claims
+    FROM claim_roles r JOIN m ON m.npi = r.npi WHERE r.service_date > m.excl_date
+    GROUP BY ALL HAVING count(*) >= {{ p.min_lines }})
+  SELECT * EXCLUDE (source, v, rw),
+         [{'source': source, 'version': v, 'row': rw, 'note': 'SAM exclusion ' || strftime(excl_date, '%m/%d/%Y')}] AS evidence_sources
+  FROM hits
+  QUALIFY row_number() OVER (PARTITION BY npi ORDER BY confidence DESC) = 1

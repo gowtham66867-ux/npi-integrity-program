@@ -1,0 +1,32 @@
+id: RPM-01
+version: "1.1"
+name: Device supply without management
+reason_code: R-501
+family: RPM
+type: soft
+weight: 575
+owner: NeXari compliance
+phase: Prototype
+data: [claims]
+description: Device-supply code 99454 billed month after month without management codes 99457/99458.
+params: {window_days: 365, min_patients: 10, min_share: 0.8}
+reason: >-
+  RPM device supply (99454) billed for {{ n_patients }} patients in {{ unmanaged }} of {{ device_months }} patient-months
+  ({{ (share * 100)|round|int }}%) with no treatment management (99457/99458) in the same month.
+sql: |
+  WITH pm AS (
+    SELECT billing_npi AS npi, patient_id, date_trunc('month', service_date) AS m,
+           bool_or(hcpcs = '99454') AS dev, bool_or(hcpcs IN ('99457', '99458')) AS mgmt,
+           list(line_id ORDER BY line_id) FILTER (hcpcs = '99454') AS dev_lines, min(service_date) AS first_dt
+    FROM claims WHERE hcpcs IN ('99454', '99457', '99458')
+      AND service_date > {{ AS_OF }} - INTERVAL {{ p.window_days }} DAY
+    GROUP BY ALL)
+  SELECT npi, count(*) FILTER (dev) AS device_months, count(*) FILTER (dev AND NOT mgmt) AS unmanaged,
+         count(*) FILTER (dev AND NOT mgmt) / count(*) FILTER (dev) AS share,
+         count(DISTINCT patient_id) FILTER (dev AND NOT mgmt) AS n_patients,
+         min(first_dt) FILTER (dev AND NOT mgmt) AS event_date,
+         flatten(list(dev_lines ORDER BY m, patient_id) FILTER (dev AND NOT mgmt))[1:50] AS evidence_claims,
+         []::STRUCT(source VARCHAR, version DATE, "row" BIGINT, note VARCHAR)[] AS evidence_sources
+  FROM pm GROUP BY npi
+  HAVING count(DISTINCT patient_id) FILTER (dev AND NOT mgmt) >= {{ p.min_patients }}
+     AND count(*) FILTER (dev AND NOT mgmt) / count(*) FILTER (dev) >= {{ p.min_share }}

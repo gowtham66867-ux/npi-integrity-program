@@ -1,0 +1,29 @@
+id: D-05
+version: "1.1"
+name: Ineligible orderer / certifier
+reason_code: R-105
+family: D
+type: hard
+owner: NeXari compliance
+phase: Prototype
+data: [order_referring, claims]
+description: Ordering or certifying NPI on RPM device or home-health claims is absent from the Order and Referring file, or not approved for that category.
+params: {min_lines: 3}
+reason: >-
+  {{ n_lines }} {{ category }} claim lines for {{ n_patients }} patients were ordered or certified by NPI {{ orderer }}
+  ({{ orderer_name }}), who is {{ 'not in' if not in_file else 'not approved for this category in' }} the Medicare Order and Referring file.
+sql: |
+  WITH c AS (
+    SELECT c.*, o.npi IS NOT NULL AS in_file,
+           CASE WHEN c.family = 'RPM' THEN 'RPM device' ELSE 'home health' END AS category
+    FROM claims c LEFT JOIN order_referring o ON o.npi = c.ordering_npi
+    WHERE c.ordering_npi IS NOT NULL AND c.family IN ('RPM', 'HH')
+      AND (o.npi IS NULL OR (c.family = 'RPM' AND o.partb <> 'Y') OR (c.family = 'HH' AND o.hha <> 'Y')))
+  SELECT c.billing_npi AS npi, c.ordering_npi AS orderer, coalesce(any_value(p.display_name), 'unknown') AS orderer_name,
+         any_value(c.category) AS category, bool_or(c.in_file) AS in_file,
+         count(*) AS n_lines, count(DISTINCT c.patient_id) AS n_patients, min(c.service_date) AS event_date,
+         list(c.line_id ORDER BY c.service_date, c.line_id)[1:50] AS evidence_claims,
+         [{'source': 'order_referring', 'version': (SELECT max(_version) FROM order_referring), 'row': NULL::BIGINT,
+           'note': 'NPI ' || c.ordering_npi || ' searched; not eligible'}] AS evidence_sources
+  FROM c LEFT JOIN providers p ON p.npi = c.ordering_npi
+  GROUP BY c.billing_npi, c.ordering_npi HAVING count(*) >= {{ p.min_lines }}
