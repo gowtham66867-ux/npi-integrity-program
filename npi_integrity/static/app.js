@@ -80,6 +80,7 @@ async function viewQueue() {
   const items = await api("/api/alerts");
   const sc = SUMMARY.scorecard, t = SUMMARY.tiers;
   const open = items.filter((a) => OPEN.has(a.status)).length;
+  const featured = items.find((a) => a.tier === "Critical");
   const kpi = (v, l, cls = "") => `<div class="kpi ${cls}"><div class="v">${v}</div><div class="l">${l}</div></div>`;
   const tiers = ["All", "Critical", "High", "Elevated"];
   const statuses = ["Open", "All", "New", "In review", "Monitoring", "Escalated", "Referred", "Dismissed"];
@@ -122,6 +123,14 @@ async function viewQueue() {
       ${sc ? kpi(`${sc.caught} / ${sc.total}`, "Synthetic planted scenarios caught", sc.caught === sc.total ? "good" : "") : ""}
       ${sc ? kpi(sc.false_alerts_per_1000, "Synthetic false alerts per 1,000 NPIs", sc.false_alerts === 0 ? "good" : "") : ""}
     </div>
+    <section class="demo-guide" aria-label="Demo walkthrough">
+      <div><b>Explore the synthetic demo</b><div class="small muted">Follow an alert from the queue to its source evidence, then inspect the evaluation and lineage.</div></div>
+      <div class="demo-steps">
+        ${featured ? `<a href="#/alert/${esc(featured.alert_id)}">1 · Review a critical alert</a>` : ""}
+        <a href="#/scorecard">2 · Check the scorecard</a>
+        <a href="#/sources">3 · Trace source files</a>
+      </div>
+    </section>
     <div class="filters">
       ${tiers.map((v) => `<button data-k="tier" data-v="${v}">${v}</button>`).join("")}
       <span class="muted" style="margin:0 6px">|</span>

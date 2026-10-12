@@ -70,6 +70,10 @@ tr[tabindex]:focus-visible { outline: 3px solid var(--blue); outline-offset: -3p
 .status.Monitoring { background: var(--amber-soft); color: var(--amber); }
 .status.In.review, .status.In-review { background: #efe9fc; color: var(--purple); }
 .filters { display: flex; gap: 8px; align-items: center; margin: 0 0 12px; flex-wrap: wrap; }
+.demo-guide { display: flex; align-items: center; justify-content: space-between; gap: 12px 20px; flex-wrap: wrap; padding: 13px 16px; margin-bottom: 16px; border: 1px solid #bfd5eb; border-radius: var(--radius); background: #f0f6fd; }
+.demo-steps { display: flex; gap: 8px; flex-wrap: wrap; }
+.demo-steps a { padding: 6px 10px; border: 1px solid #bfd5eb; border-radius: 8px; background: #fff; font-size: 12px; font-weight: 600; }
+.demo-steps a:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
 .filters button { border: 1px solid var(--line); background: #fff; border-radius: 16px; padding: 4px 12px; cursor: pointer; font: inherit; font-size: 12.5px; }
 .filters button.on { background: var(--navy); color: #fff; border-color: var(--navy); }
 
