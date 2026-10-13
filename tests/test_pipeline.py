@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -292,10 +293,17 @@ def test_provider_check_qualifies_status_and_links_to_case(client):
     assert tc.get("/api/providers/0000000000").status_code == 404
 
 
-def test_verification_reports_each_field_and_does_not_audit_submitted_values(client):
+def test_verification_reports_each_field_and_does_not_audit_submitted_values(client, monkeypatch):
     tc, api = client
     p = api.one(api.db(), "SELECT npi, display_name, city, state, taxonomy_desc FROM providers "
                               "WHERE city IS NOT NULL AND taxonomy_desc IS NOT NULL ORDER BY npi LIMIT 1")
+    def live_record(npi):
+        if npi != p["npi"]:
+            raise HTTPException(404, "NPI not found in the live NPPES Registry")
+        return {"npi": npi, "name": p["display_name"], "city": p["city"], "state": p["state"],
+                "taxonomy": p["taxonomy_desc"], "last_updated": "2026-10-01",
+                "source_url": f"https://npiregistry.cms.hhs.gov/provider-view/{npi}"}
+    monkeypatch.setattr(api, "lookup_nppes", live_record)
     audit_before = len(tc.get("/api/audit", params={"limit": 1000}).json())
     r = tc.post("/api/verify", json={"npi": p["npi"], "name": p["display_name"].lower(),
                                      "city": "NOT THE CITY", "taxonomy": p["taxonomy_desc"],

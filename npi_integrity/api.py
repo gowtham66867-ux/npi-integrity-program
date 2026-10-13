@@ -27,6 +27,7 @@ from . import config
 from .ingest import SOURCES
 from .pipeline import audit, connect, latest_run, now, rerun_alert
 from .ux import field_result, npi_valid, provider_assessment
+from .nppes_live import lookup as lookup_nppes
 
 STATIC = Path(__file__).parent / "static"
 app = FastAPI(title="NPI Integrity - reviewer console", version="0.2.0")
@@ -385,6 +386,12 @@ def provider(npi: str):
                   "as_of": one(cur, "SELECT as_of FROM runs WHERE run_id = ?", [rid])["as_of"]})
 
 
+@app.get("/api/nppes/{npi}")
+def live_nppes(npi: str):
+    """Read one public NPPES record without joining synthetic signals."""
+    return lookup_nppes(npi)
+
+
 class VerificationInput(BaseModel):
     npi: str = Field(min_length=10, max_length=10)
     name: str = Field(default="", max_length=120)
@@ -398,16 +405,15 @@ class VerificationInput(BaseModel):
 def verify_provider(body: VerificationInput):
     if not npi_valid(body.npi):
         raise HTTPException(400, "Enter a valid 10-digit NPI")
-    p = one(db(), "SELECT npi, display_name, city, state, taxonomy_desc FROM providers WHERE npi = ?", [body.npi])
-    if not p:
-        raise HTTPException(404, "NPI is not present in the current pilot source snapshot")
-    fields = [("Name", body.name, p["display_name"]), ("City", body.city, p["city"]),
-              ("State", body.state, p["state"]), ("Taxonomy", body.taxonomy, p["taxonomy_desc"]),
+    p = lookup_nppes(body.npi)
+    fields = [("Name", body.name, p["name"]), ("City", body.city, p["city"]),
+              ("State", body.state, p["state"]), ("Taxonomy", body.taxonomy, p["taxonomy"]),
               ("License", body.license, None)]
-    return {"npi": body.npi, "fields": [{"field": label, "entered": entered,
+    return {"npi": body.npi, "source": "Live NPPES Registry", "last_updated": p["last_updated"],
+            "source_url": p["source_url"], "fields": [{"field": label, "entered": entered,
             "official": official, "result": field_result(entered, official)}
             for label, entered, official in fields],
-            "note": "Comparison uses the current NPPES snapshot. License data is not connected. Values entered are not saved."}
+            "note": "Comparison uses a live NPPES lookup. A match does not establish licensing or credentialing. License verification is not connected. Values entered are not saved."}
 
 
 class RosterInput(BaseModel):

@@ -64,7 +64,7 @@ async function loadSummary() {
 }
 
 /* ---------------------------------------------------------------- router */
-const routes = { home: viewHome, verify: viewVerify, roster: viewRoster, leads: viewLeads, methodology: viewMethodology,
+const routes = { home: viewHome, live: viewLiveNppes, verify: viewVerify, roster: viewRoster, leads: viewLeads, methodology: viewMethodology,
   queue: viewQueue, watch: viewWatch, alert: viewAlert, provider: viewProvider, scorecard: viewScorecard, rules: viewRules, sources: viewSources, audit: viewAudit };
 async function route() {
   const [, requested, arg] = location.hash.split("/");
@@ -83,9 +83,10 @@ async function route() {
 window.addEventListener("hashchange", route);
 async function runSearch(q) {
   if (!q) return;
+  if (/^\d{10}$/.test(q)) { location.hash = `#/live/${q}`; return; }
   const res = await api(`/api/search?q=${encodeURIComponent(q)}`);
   if (res.length === 1) { location.hash = `#/provider/${res[0].npi}`; return; }
-  app.innerHTML = `<h1>Search: ${esc(q)}</h1><div class="tablewrap"><table class="t"><tr><th>NPI</th><th>Name</th><th>Taxonomy</th><th>Location</th><th>Status</th></tr>
+  app.innerHTML = `<h1>Synthetic demo search: ${esc(q)}</h1><p class="small muted">Name search covers only the synthetic pilot. For a real provider, enter the exact 10-digit NPI in Live NPPES.</p><div class="tablewrap"><table class="t"><tr><th>NPI</th><th>Name</th><th>Taxonomy</th><th>Location</th><th>Status</th></tr>
     ${res.map((p) => `<tr class="click" data-href="#/provider/${p.npi}"><td class="mono">${p.npi}</td><td>${esc(p.display_name)}</td><td>${esc(p.taxonomy_desc)}</td><td>${esc(title(p.city))}, ${esc(p.state)}</td><td>${esc(p.status)}</td></tr>`).join("") || `<tr><td colspan=5 class="muted">No matches</td></tr>`}</table></div>`;
 }
 $("#search").addEventListener("submit", async (e) => {
@@ -97,20 +98,40 @@ async function viewHome() {
   const items = await api("/api/alerts");
   const first = items[0];
   app.innerHTML = `<section class="hero card"><div class="eyebrow">Clinic / Facility</div><h1>What would you like to check?</h1>
-    <p class="muted">Find a provider, compare your information with the source record, or check a synthetic roster.</p>
-    <form id="home-search" class="hero-search"><label for="home-q">NPI or provider name</label><div><input id="home-q" required autocomplete="off" placeholder="Search NPI or name"><button class="b primary">Check provider</button></div></form>
-    <p class="small muted">Pilot uses public source records and synthetic claims. Do not enter patient data.</p></section>
+    <p class="muted">Enter an exact NPI to check the live CMS record. The alert demo and claims remain synthetic.</p>
+    <form id="home-search" class="hero-search"><label for="home-q">10-digit NPI</label><div><input id="home-q" required inputmode="numeric" pattern="[0-9]{10}" maxlength="10" autocomplete="off" placeholder="Enter a 10-digit NPI"><button class="b primary">Check live NPPES</button></div></form>
+    <p class="small muted">Do not enter patient data. NPPES does not verify licensing or credentialing.</p></section>
     <div class="journeys"><a class="journey card" href="#/home" id="focus-search"><strong>Check a provider →</strong><span>See current signals and the dated evidence.</span></a>
-      <a class="journey card" href="#/verify"><strong>Verify our information →</strong><span>Compare your fields with the available NPPES snapshot.</span></a>
+      <a class="journey card" href="#/verify"><strong>Verify our information →</strong><span>Compare your fields with a live NPPES record.</span></a>
       <a class="journey card" href="#/roster"><strong>Check a roster →</strong><span>Run a one-time check on up to 100 synthetic NPIs.</span></a></div>
-    <section class="card"><h2>Priority signal for review</h2>${first ? `<p><a href="#/alert/${esc(first.alert_id)}">${esc(first.display_name || first.npi)} · ${esc(first.top_reason || "View evidence")} →</a></p>` : `<p class="muted">No current alerts.</p>`}
+    <section class="card"><h2>Synthetic demo signal for review</h2>${first ? `<p><a href="#/alert/${esc(first.alert_id)}">${esc(first.display_name || first.npi)} · ${esc(first.top_reason || "View evidence")} →</a></p>` : `<p class="muted">No current alerts.</p>`}
       <a href="#/queue">Open all alerts →</a></section>`;
   $("#home-search").addEventListener("submit", async (e) => { e.preventDefault(); try { await runSearch($("#home-q").value.trim()); } catch (err) { toast(err.message); } });
   $("#focus-search").addEventListener("click", (e) => { e.preventDefault(); $("#home-q").focus(); });
 }
 
+async function viewLiveNppes(npi) {
+  if (!npi) {
+    app.innerHTML = `<h1>Live NPPES lookup</h1><p class="muted">Check one public provider record by exact 10-digit NPI. This does not run synthetic alerts or check licensing, exclusions, or claims.</p>
+      <form id="live-search" class="card hero-search"><label for="live-npi">10-digit NPI</label><div><input id="live-npi" required inputmode="numeric" pattern="[0-9]{10}" maxlength="10" autocomplete="off"><button class="b primary">Look up NPI</button></div></form>`;
+    $("#live-search").addEventListener("submit", (e) => { e.preventDefault(); location.hash = `#/live/${$("#live-npi").value.trim()}`; });
+    return;
+  }
+  const p = await api(`/api/nppes/${encodeURIComponent(npi)}`);
+  app.innerHTML = `<p class="small"><a href="#/live">← Check another NPI</a></p><div class="card alerthead"><div>
+      <div class="eyebrow">LIVE CMS NPPES REGISTRY · retrieved ${esc(p.retrieved_at.slice(0, 16).replace("T", " "))} UTC</div>
+      <h1>${esc(p.name)}</h1><p class="muted"><span class="mono">${esc(p.npi)}</span> · ${esc(p.entity_type || "Type unavailable")} · ${esc(p.taxonomy || "Taxonomy unavailable")}</p>
+      <div class="finding"><strong>${esc(p.status)} NPPES record</strong><p>${p.status === "Active" ? "This NPI appears as active in the Registry. That does not establish licensing, credentialing, Medicare enrollment, or absence of exclusion." : "Review the Registry record and dates directly; no eligibility conclusion is made here."}</p></div>
+      <p class="small muted">Record last updated ${mdy(p.last_updated)} · enumerated ${mdy(p.enumeration_date)}. Live source data; no synthetic score is assigned.</p></div></div>
+      <div class="card" style="margin-top:16px"><h2>Published provider details</h2><dl class="kv">
+        <dt>Primary taxonomy</dt><dd>${esc(p.taxonomy || "Unavailable")} ${p.taxonomy_code ? `<span class="mono small">${esc(p.taxonomy_code)}</span>` : ""}</dd>
+        <dt>Practice location</dt><dd>${esc(p.city || "Unavailable")}, ${esc(p.state || "")} ${esc(p.postal_code || "")}</dd>
+        <dt>Source</dt><dd><a href="${esc(p.source_url)}" target="_blank" rel="noopener noreferrer">Open this record in the CMS NPI Registry ↗</a></dd>
+      </dl><p class="small muted">This is a single live lookup. Exclusion, enrollment, licensing, and claim-level checks require separate verified sources.</p></div>`;
+}
+
 async function viewVerify() {
-  app.innerHTML = `<h1>Verify our information</h1><p class="muted">Enter an NPI and only the fields you want to compare. The values are not saved.</p>
+  app.innerHTML = `<h1>Verify our information</h1><p class="muted">Compare your fields with a live CMS NPPES lookup for one exact NPI. Values entered are not saved; do not enter patient data.</p>
     <form id="verify-form" class="card field-form"><label>NPI <input name="npi" inputmode="numeric" pattern="[0-9]{10}" maxlength="10" required></label>
       <label>Name <input name="name" maxlength="120"></label><label>City <input name="city" maxlength="80"></label>
       <label>State <input name="state" maxlength="2"></label><label>Taxonomy <input name="taxonomy" maxlength="120"></label>
@@ -122,7 +143,7 @@ async function viewVerify() {
     const body = Object.fromEntries(new FormData(e.target).entries());
     try {
       const result = await api("/api/verify", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
-      $("#verify-results").innerHTML = `<div class="card result-card"><h2>Comparison for NPI ${esc(result.npi)}</h2><p class="small muted">${esc(result.note)}</p>
+      $("#verify-results").innerHTML = `<div class="card result-card"><h2>Comparison for NPI ${esc(result.npi)}</h2><p class="small muted">${esc(result.source)} · record updated ${mdy(result.last_updated)}. ${esc(result.note)} <a href="${esc(result.source_url)}" target="_blank" rel="noopener noreferrer">Open CMS record ↗</a></p>
         <div class="tablewrap"><table class="t"><thead><tr><th>Field</th><th>You entered</th><th>Source record</th><th>Result</th></tr></thead><tbody>${result.fields.map((f) => `<tr><td>${esc(f.field)}</td><td>${esc(f.entered || "—")}</td><td>${esc(f.official || "Unavailable")}</td><td><strong>${esc(f.result)}</strong></td></tr>`).join("")}</tbody></table></div></div>`;
     } catch (err) { $("#verify-results").innerHTML = `<div class="banner" role="alert">${esc(err.message)}</div>`; }
   });
@@ -474,10 +495,10 @@ async function viewProvider(npi) {
   const d = await api(`/api/providers/${npi}`);
   const p = d.provider;
   app.innerHTML = `<p class="small"><a href="#" data-back="1">← Back</a></p>
-    <div class="card alerthead"><div><div class="small muted">Provider Check · source snapshot ${mdy(d.as_of)}</div><h1>${esc(p.display_name || npi)}</h1>
+    <div class="card alerthead"><div><div class="small muted">Synthetic demo provider check · source snapshot ${mdy(d.as_of)}</div><h1>${esc(p.display_name || npi)}</h1>
       <div class="muted"><span class="mono">${esc(npi)}</span> · ${esc(p.taxonomy_desc || "")} · ${esc(title(p.city))}, ${esc(p.state)}</div>
       <div class="finding"><strong>${esc(d.assessment.label)}</strong><p>${esc(d.assessment.sentence)}</p></div>
-      <p class="small muted">This result covers the checked pilot sources as of ${mdy(d.as_of)}. It is not credential verification or a fraud finding.</p></div>
+      <p class="small muted">This synthetic result covers demo sources as of ${mdy(d.as_of)}. It is not the live NPPES record, credential verification, or a fraud finding. <a href="#/live/${esc(npi)}">Check this NPI in live NPPES ↗</a></p></div>
       <div style="margin-left:auto;text-align:right">${d.score ? scoreBadge(d.score.score, d.score.tier) : `<span class="score tier-Low">0</span><span class="tiertxt">Low</span>`}
       ${d.alert ? `<div style="margin-top:8px"><a href="#/alert/${d.alert.alert_id}">Open alert ${esc(d.alert.alert_id)} →</a></div>` : `<div class="small muted" style="margin-top:8px">No alert this run</div>`}</div></div>
     <div class="grid g2" style="margin-top:16px"><div class="stack">

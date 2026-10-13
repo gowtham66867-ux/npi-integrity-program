@@ -125,7 +125,16 @@ The private console is deployed at [npi-console](https://npi-console-10566432634
 # Task-focused console pilot
 
 The console now opens on a Clinic / Facility home page with provider search,
-field-level NPPES comparison, and a one-time synthetic roster check. Reviewer
+field-level NPPES comparison, and a one-time synthetic roster check. Exact NPI
+searches and the comparison form now make a read-only request to the official
+NPPES Registry API v2.1. The result is labeled live, includes the Registry
+record's update date and link, and is never joined to synthetic scores, alerts,
+claims, or the synthetic roster. Name searches and the existing provider/case
+pages still use the synthetic demo. The API lookup is one NPI at a time and is
+not a substitute for the monthly full file, weekly increments, or deactivation
+report; those real-file connectors have not been ingested into this deployment.
+An NPI Registry result does not establish licensing, credentialing, enrollment,
+or exclusion clearance. Reviewer
 and supervisor roles can switch to a Government lead queue; the server checks
 that role for `/api/government/leads`. Provider and case pages lead with a
 qualified finding, then reveal source evidence and technical detail. Rules,

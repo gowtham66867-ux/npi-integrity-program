@@ -33,3 +33,13 @@ On October 13, the task-focused console update passed 159 tests and the offline 
 ## PHI boundary
 
 The current deployment is a synthetic pilot and must not receive PHI. It pins `NPI_DATA_MODE=synthetic`, rejects free-text review reasons, and has no external model credentials. Data Access audit logs for Firestore, IAP, and Cloud Run and Firestore point-in-time recovery are enabled by [harden_gcp.sh](harden_gcp.sh), which the deployment script reruns on each release. See [HIPAA_READINESS.md](HIPAA_READINESS.md) for verified controls and requirements before any PHI use; these settings alone do not establish HIPAA compliance.
+
+The optional exact-NPI lookup and verification form call the public NPPES API
+v2.1 server-side. They return a single public Registry record without storing
+the response or joining it to synthetic scores. Bulk monitoring still requires
+an independently validated monthly/weekly/deactivation ingestion pipeline.
+On October 13, revision `npi-console-00007-gws` passed 176 tests and the offline
+evaluation gates and serves 100% of traffic with IAP enabled and
+`NPI_DATA_MODE=synthetic`. A signed-in browser check retrieved NPI 1447268255
+from CMS through Cloud Run and confirmed the live comparison showed a matching
+name and differing city. The existing synthetic alert demo remained labeled.

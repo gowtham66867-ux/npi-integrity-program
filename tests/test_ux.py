@@ -28,15 +28,16 @@ def test_no_signal_does_not_become_unqualified_clear():
 
 
 def test_verify_license_is_explicitly_unavailable(monkeypatch):
-    monkeypatch.setattr(api, "db", lambda: object())
-    monkeypatch.setattr(api, "one", lambda *_: {"npi": "1234567893", "display_name": "Jane Smith",
-                                            "city": "Austin", "state": "TX", "taxonomy_desc": "Family Medicine"})
+    monkeypatch.setattr(api, "lookup_nppes", lambda *_: {"npi": "1234567893", "name": "Jane Smith",
+        "city": "Austin", "state": "TX", "taxonomy": "Family Medicine", "last_updated": "2026-10-01",
+        "source_url": "https://npiregistry.cms.hhs.gov/provider-view/1234567893"})
     body = api.VerificationInput(npi="1234567893", name="JANE SMITH", city="Dallas", license="TX123")
     result = api.verify_provider(body)
     outcomes = {field["field"]: field["result"] for field in result["fields"]}
     assert outcomes == {"Name": "Match", "City": "Differs", "State": "Not supplied",
                         "Taxonomy": "Not supplied", "License": "Cannot check yet"}
     assert "saved" in result["note"]
+    assert result["source"] == "Live NPPES Registry"
 
 
 def test_roster_rejects_invalid_or_duplicate_npis(monkeypatch):
