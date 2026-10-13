@@ -28,6 +28,7 @@ from .ingest import SOURCES
 from .pipeline import audit, connect, latest_run, now, rerun_alert
 from .ux import field_result, npi_valid, provider_assessment
 from .nppes_live import lookup as lookup_nppes
+from .leie_public import check as check_leie
 
 STATIC = Path(__file__).parent / "static"
 app = FastAPI(title="NPI Integrity - reviewer console", version="0.2.0")
@@ -390,6 +391,12 @@ def provider(npi: str):
 def live_nppes(npi: str):
     """Read one public NPPES record without joining synthetic signals."""
     return lookup_nppes(npi)
+
+
+@app.get("/api/public-integrity/{npi}")
+def public_integrity(npi: str):
+    """Exact-NPI OIG snapshot check, independent of synthetic detection data."""
+    return {"leie": check_leie(npi)}
 
 
 class VerificationInput(BaseModel):

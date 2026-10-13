@@ -1,5 +1,8 @@
 # NPI Integrity console test plan — synthetic pilot
 
+For the live NPPES and dated OIG exact-NPI source checks, use the
+[public-data acceptance plan](PUBLIC_DATA_TEST_CASES.md) alongside this plan.
+
 This plan verifies the deployed task-focused console without using patient data. It does not certify HIPAA compliance, real-world detection accuracy, or production readiness. Run automated checks with `.venv/bin/python -m pytest -q tests`, then execute the browser cases against the authenticated demo at `https://npi-console-1056643263413.us-central1.run.app/`. Use only generated NPIs and fictitious comparison values. Record the revision, tester, date, browser, observed result, and any defect for each manual case.
 
 ## Test data and setup

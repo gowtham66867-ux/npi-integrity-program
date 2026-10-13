@@ -112,13 +112,17 @@ async function viewHome() {
 
 async function viewLiveNppes(npi) {
   if (!npi) {
-    app.innerHTML = `<h1>Live NPPES lookup</h1><p class="muted">Check one public provider record by exact 10-digit NPI. This does not run synthetic alerts or check licensing, exclusions, or claims.</p>
+    app.innerHTML = `<h1>Public provider check</h1><p class="muted">Check one live NPPES profile and a dated OIG exclusion snapshot by exact 10-digit NPI. This does not run synthetic alerts or verify licensing, enrollment, or claims.</p>
       <form id="live-search" class="card hero-search"><label for="live-npi">10-digit NPI</label><div><input id="live-npi" required inputmode="numeric" pattern="[0-9]{10}" maxlength="10" autocomplete="off"><button class="b primary">Look up NPI</button></div></form>`;
     $("#live-search").addEventListener("submit", (e) => { e.preventDefault(); location.hash = `#/live/${$("#live-npi").value.trim()}`; });
     return;
   }
-  const p = await api(`/api/nppes/${encodeURIComponent(npi)}`);
-  app.innerHTML = `<p class="small"><a href="#/live">← Check another NPI</a></p><div class="card alerthead"><div>
+  const [profileResponse, leieResponse] = await Promise.allSettled([
+    api(`/api/nppes/${encodeURIComponent(npi)}`),
+    api(`/api/public-integrity/${encodeURIComponent(npi)}`),
+  ]);
+  const p = profileResponse.status === "fulfilled" ? profileResponse.value : null;
+  const profileCard = p ? `<div class="card alerthead"><div>
       <div class="eyebrow">LIVE CMS NPPES REGISTRY · retrieved ${esc(p.retrieved_at.slice(0, 16).replace("T", " "))} UTC</div>
       <h1>${esc(p.name)}</h1><p class="muted"><span class="mono">${esc(p.npi)}</span> · ${esc(p.entity_type || "Type unavailable")} · ${esc(p.taxonomy || "Taxonomy unavailable")}</p>
       <div class="finding"><strong>${esc(p.status)} NPPES record</strong><p>${p.status === "Active" ? "This NPI appears as active in the Registry. That does not establish licensing, credentialing, Medicare enrollment, or absence of exclusion." : "Review the Registry record and dates directly; no eligibility conclusion is made here."}</p></div>
@@ -127,7 +131,28 @@ async function viewLiveNppes(npi) {
         <dt>Primary taxonomy</dt><dd>${esc(p.taxonomy || "Unavailable")} ${p.taxonomy_code ? `<span class="mono small">${esc(p.taxonomy_code)}</span>` : ""}</dd>
         <dt>Practice location</dt><dd>${esc(p.city || "Unavailable")}, ${esc(p.state || "")} ${esc(p.postal_code || "")}</dd>
         <dt>Source</dt><dd><a href="${esc(p.source_url)}" target="_blank" rel="noopener noreferrer">Open this record in the CMS NPI Registry ↗</a></dd>
-      </dl><p class="small muted">This is a single live lookup. Exclusion, enrollment, licensing, and claim-level checks require separate verified sources.</p></div>`;
+      </dl><p class="small muted">This is a single live lookup. Enrollment, licensing, and claim-level checks require separate verified sources.</p></div>`
+    : `<div class="card"><h1>NPI ${esc(npi)}</h1><div class="banner" role="alert">Live NPPES profile unavailable: ${esc(profileResponse.reason?.message || "Lookup failed")}. A missing Registry result is not a clearance or deactivation finding; check the official deactivation file.</div></div>`;
+  app.innerHTML = `<p class="small"><a href="#/live">← Check another NPI</a></p>${profileCard}
+    <div class="card" style="margin-top:16px" id="public-integrity" aria-live="polite"><h2>Public exclusion check</h2><p class="muted">Checking the dated OIG snapshot…</p></div>
+    <div class="card" style="margin-top:16px"><h2>Data coverage for this provider check</h2>
+    <ul><li><strong>NPPES identity:</strong> ${p ? "live lookup above" : "unavailable; no profile conclusion"}.</li>
+      <li><strong>OIG LEIE:</strong> dated exact-NPI snapshot above; name-only rows are not checked.</li>
+      <li><strong>Medicare annual activity:</strong> not connected yet; no utilization conclusion is available.</li>
+      <li><strong>Claim-level activity and fraud findings:</strong> not connected. The separate alert demo uses synthetic claims.</li></ul></div>`;
+  if (leieResponse.status === "fulfilled") {
+    const {leie} = leieResponse.value;
+    const matchRows = leie.matches.map((m) => `<li><strong>${esc(m.name || "Name unavailable")}</strong> · ${esc(m.city || "City unavailable")}, ${esc(m.state || "State unavailable")} · exclusion type ${esc(m.exclusion_type || "unavailable")} · effective ${esc(mdy(String(m.exclusion_date || "").replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3")))}</li>`).join("");
+    $("#public-integrity").innerHTML = `<h2>OIG LEIE exclusion snapshot</h2><div class="finding ${leie.matches.length ? "attention" : ""}"><strong>${esc(leie.result)}</strong>
+      <p>${leie.matches.length ? "A published LEIE row contains this exact NPI. Confirm the person or organization in OIG's official search before taking action." : "No row publishing this exact NPI was found in this snapshot. This is not exclusion clearance: most LEIE rows do not publish an NPI."}</p></div>
+      ${leie.stale ? `<div class="banner" role="alert">Snapshot is over 45 days old. Refresh the source before relying on it.</div>` : ""}
+      ${matchRows ? `<ul>${matchRows}</ul>` : ""}
+      <p class="small muted">OIG source updated ${mdy(leie.source_updated_at)} · downloaded ${esc(leie.fetched_at.slice(0, 10))} · ${fmtN(leie.indexed_rows)} of ${fmtN(leie.total_rows)} rows publish a 10-digit NPI.</p>
+      <details><summary>Source checksum</summary><span class="mono source-hash">SHA-256: ${esc(leie.source_sha256)}</span></details>
+      <p class="small muted">${esc(leie.note)} <a href="${esc(leie.search_url)}" target="_blank" rel="noopener noreferrer">Verify in OIG search ↗</a></p>`;
+  } else {
+    $("#public-integrity").innerHTML = `<h2>OIG LEIE exclusion snapshot</h2><div class="banner" role="alert">Cannot check yet: ${esc(leieResponse.reason?.message || "Lookup failed")}. No exclusion conclusion is available.</div>`;
+  }
 }
 
 async function viewVerify() {

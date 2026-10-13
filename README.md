@@ -143,6 +143,18 @@ Sources, Scorecard, and Audit live under Methodology & Admin.
 The roster endpoint accepts at most 100 unique, checksum-valid NPIs and does
 not persist uploads or monitor them between runs. Verification values are not
 stored; licensing returns “Cannot check yet” until a source is connected.
+
+The live provider page also shows a **dated HHS-OIG LEIE exact-NPI snapshot**,
+built from the public `UPDATED.csv` download. Its minimal packaged index keeps
+only rows publishing a 10-digit NPI and excludes DOB and street addresses.
+Most LEIE rows do not publish an NPI, so an absent exact match is **not
+exclusion clearance**. A published NPI match requires confirmation in OIG's
+official online search; it is not a fraud determination. The page displays
+OIG update date, download time, source hash, coverage, and a stale warning
+45 days after the OIG update. Run
+`.venv/bin/python -m scripts.sync_leie` to refresh the reviewed snapshot before
+a release. The [public-data test cases](tests/PUBLIC_DATA_TEST_CASES.md) cover
+the new source and the remaining real-data integrations.
 These pilot features do not establish clinic tenant or government jurisdiction
 isolation. Keep access limited to the existing internal synthetic pilot. Do not
 use actual patient information or treat “No flagged signals” as credential

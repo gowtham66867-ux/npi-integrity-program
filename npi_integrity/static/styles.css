@@ -67,6 +67,8 @@ h3 { font-size: 13px; margin: 14px 0 6px; text-transform: uppercase; letter-spac
 .finding { margin-top: 15px; padding: 13px 15px; background: var(--blue-soft); border-left: 4px solid var(--blue); border-radius: 7px; max-width: 720px; }
 .finding strong { font-size: 17px; }
 .finding p { margin: 6px 0; }
+.finding.attention { background: var(--amber-soft); border-left-color: #bf7816; }
+.source-hash { display: block; overflow-wrap: anywhere; margin-top: 6px; }
 .plain-reason { border-left: 4px solid var(--amber); padding: 10px 13px; margin: 8px 0; background: #fffaf0; border-radius: 6px; }
 .plain-reason details { margin-top: 7px; }
 .plain-reason .reason { margin-top: 8px; }

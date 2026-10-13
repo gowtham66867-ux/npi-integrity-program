@@ -43,3 +43,26 @@ evaluation gates and serves 100% of traffic with IAP enabled and
 `NPI_DATA_MODE=synthetic`. A signed-in browser check retrieved NPI 1447268255
 from CMS through Cloud Run and confirmed the live comparison showed a matching
 name and differing city. The existing synthetic alert demo remained labeled.
+
+The October 13 public-data release adds a minimal exact-NPI index of the
+HHS-OIG LEIE active-exclusion download to the provider page. The OIG source
+reported an update on 2026-10-09; the index was downloaded on 2026-10-13 from
+84,093 rows, of which 8,924 published a 10-digit NPI. The source CSV SHA-256
+is `7483d47bc48734f7955095d51d13dd1111b11cc8a60f54ebe894806e6c293c03`.
+The index excludes DOB and street address and never treats an absent exact-NPI
+match as exclusion clearance. A published match requires verification in the
+official OIG search. Its source-update date, download date, coverage, and hash
+are visible in the UI. This snapshot is not a real-time fraud feed.
+
+Revision `npi-console-00009-d2x` serves 100% of traffic from image digest
+`sha256:4d899cb895d29b5ff8036a147a6a379b6c9568b6f8a6b8f0890ba5616a789777`.
+The release harness passed 184 tests and 16/16 offline evaluation gates.
+Deployment preflight confirmed the approved project, account, recent 8192
+payment-method attestation, and 6022 block. Cloud Run still has IAP enabled and
+`NPI_DATA_MODE=synthetic`; an unauthenticated request redirected to Google
+sign-in. Signed-in browser checks showed both an absent exact-NPI match and a
+published LEIE NPI match, and confirmed the narrow-screen layout after a
+checksum overflow fix. Firestore case persistence was not retested on this
+revision; the case storage backend and database configuration were unchanged.
+See [public-data acceptance cases](../tests/PUBLIC_DATA_TEST_CASES.md) for
+remaining source-specific and browser checks.
