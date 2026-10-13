@@ -10,7 +10,8 @@ const statusTag = (s) => `<span class="status ${esc(String(s).replace(" ", "-"))
 const chips = (ids, hl, cls = "hard") => (ids || []).map((r) => `<span class="chip ${hl && hl.has(r) ? cls : ""}">${esc(r)}</span>`).join("");
 const HARD_RULES = new Set(["D-01", "D-02", "D-03", "D-04", "D-05", "D-06", "D-07"]);
 
-let SESSION = {actor: null, role: "local_demo"};
+let SESSION = {actor: null, role: "local_demo", modes: ["clinic", "government"]};
+let MODE = "clinic";
 function reviewer() {
   if (SESSION.actor) return SESSION.actor;
   try { return localStorage.getItem("npi.reviewer") || ""; } catch { return ""; }
@@ -35,6 +36,20 @@ function toast(msg) {
 let SUMMARY = null;
 async function loadSummary() {
   SESSION = await api("/api/session");
+  try { MODE = sessionStorage.getItem("npi.mode") || MODE; } catch {}
+  if (location.hash === "#/leads" || location.hash === "#/watch") MODE = "government";
+  MODE = SESSION.modes.includes(MODE) ? MODE : SESSION.modes[0];
+  $("#mode-switch").innerHTML = SESSION.modes.length > 1
+    ? SESSION.modes.map((m) => `<button class="mode-button ${MODE === m ? "active" : ""}" data-mode="${m}" aria-pressed="${MODE === m}">${m === "clinic" ? "Clinic / Facility" : "Government"}</button>`).join("")
+    : `<span class="small muted">Clinic / Facility</span>`;
+  $("#mode-switch").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
+    MODE = b.dataset.mode;
+    try { sessionStorage.setItem("npi.mode", MODE); } catch {}
+    $("#mode-switch").querySelectorAll("button").forEach((button) => { button.classList.toggle("active", button.dataset.mode === MODE); button.setAttribute("aria-pressed", String(button.dataset.mode === MODE)); });
+    document.querySelectorAll("#nav a").forEach((a) => a.classList.toggle("hidden", !!a.dataset.modes && !a.dataset.modes.split(" ").includes(MODE)));
+    location.hash = MODE === "clinic" ? "#/home" : "#/leads";
+  }));
+  document.querySelectorAll("#nav a").forEach((a) => a.classList.toggle("hidden", !!a.dataset.modes && !a.dataset.modes.split(" ").includes(MODE)));
   if (SESSION.actor) {
     $("#reviewer").value = SESSION.actor;
     $("#reviewer").readOnly = true;
@@ -49,29 +64,116 @@ async function loadSummary() {
 }
 
 /* ---------------------------------------------------------------- router */
-const routes = { queue: viewQueue, watch: viewWatch, alert: viewAlert, provider: viewProvider, scorecard: viewScorecard, rules: viewRules, sources: viewSources, audit: viewAudit };
+const routes = { home: viewHome, verify: viewVerify, roster: viewRoster, leads: viewLeads, methodology: viewMethodology,
+  queue: viewQueue, watch: viewWatch, alert: viewAlert, provider: viewProvider, scorecard: viewScorecard, rules: viewRules, sources: viewSources, audit: viewAudit };
 async function route() {
-  const [, view = "queue", arg] = location.hash.split("/");
-  document.querySelectorAll("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.v === view));
+  const [, requested, arg] = location.hash.split("/");
   app.innerHTML = `<p class="muted pad">Loading…</p>`;
   try {
     if (!SUMMARY) await loadSummary();
-    await (routes[view] || viewQueue)(arg && decodeURIComponent(arg));
+    const view = requested || (MODE === "clinic" ? "home" : "leads");
+    if ((view === "leads" || view === "watch") && !SESSION.modes.includes("government")) throw new Error("This view is not enabled for your account.");
+    document.querySelectorAll("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.v === view));
+    await (routes[view] || viewHome)(arg && decodeURIComponent(arg));
   } catch (e) {
     app.innerHTML = `<div class="card"><h2>Something went wrong</h2><p>${esc(e.message)}</p></div>`;
   }
   window.scrollTo(0, 0);
 }
 window.addEventListener("hashchange", route);
-$("#search").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const q = $("#q").value.trim();
+async function runSearch(q) {
   if (!q) return;
   const res = await api(`/api/search?q=${encodeURIComponent(q)}`);
   if (res.length === 1) { location.hash = `#/provider/${res[0].npi}`; return; }
   app.innerHTML = `<h1>Search: ${esc(q)}</h1><div class="tablewrap"><table class="t"><tr><th>NPI</th><th>Name</th><th>Taxonomy</th><th>Location</th><th>Status</th></tr>
     ${res.map((p) => `<tr class="click" data-href="#/provider/${p.npi}"><td class="mono">${p.npi}</td><td>${esc(p.display_name)}</td><td>${esc(p.taxonomy_desc)}</td><td>${esc(title(p.city))}, ${esc(p.state)}</td><td>${esc(p.status)}</td></tr>`).join("") || `<tr><td colspan=5 class="muted">No matches</td></tr>`}</table></div>`;
+}
+$("#search").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try { await runSearch($("#q").value.trim()); } catch (err) { toast(err.message); }
 });
+
+async function viewHome() {
+  const items = await api("/api/alerts");
+  const first = items[0];
+  app.innerHTML = `<section class="hero card"><div class="eyebrow">Clinic / Facility</div><h1>What would you like to check?</h1>
+    <p class="muted">Find a provider, compare your information with the source record, or check a synthetic roster.</p>
+    <form id="home-search" class="hero-search"><label for="home-q">NPI or provider name</label><div><input id="home-q" required autocomplete="off" placeholder="Search NPI or name"><button class="b primary">Check provider</button></div></form>
+    <p class="small muted">Pilot uses public source records and synthetic claims. Do not enter patient data.</p></section>
+    <div class="journeys"><a class="journey card" href="#/home" id="focus-search"><strong>Check a provider →</strong><span>See current signals and the dated evidence.</span></a>
+      <a class="journey card" href="#/verify"><strong>Verify our information →</strong><span>Compare your fields with the available NPPES snapshot.</span></a>
+      <a class="journey card" href="#/roster"><strong>Check a roster →</strong><span>Run a one-time check on up to 100 synthetic NPIs.</span></a></div>
+    <section class="card"><h2>Priority signal for review</h2>${first ? `<p><a href="#/alert/${esc(first.alert_id)}">${esc(first.display_name || first.npi)} · ${esc(first.top_reason || "View evidence")} →</a></p>` : `<p class="muted">No current alerts.</p>`}
+      <a href="#/queue">Open all alerts →</a></section>`;
+  $("#home-search").addEventListener("submit", async (e) => { e.preventDefault(); try { await runSearch($("#home-q").value.trim()); } catch (err) { toast(err.message); } });
+  $("#focus-search").addEventListener("click", (e) => { e.preventDefault(); $("#home-q").focus(); });
+}
+
+async function viewVerify() {
+  app.innerHTML = `<h1>Verify our information</h1><p class="muted">Enter an NPI and only the fields you want to compare. The values are not saved.</p>
+    <form id="verify-form" class="card field-form"><label>NPI <input name="npi" inputmode="numeric" pattern="[0-9]{10}" maxlength="10" required></label>
+      <label>Name <input name="name" maxlength="120"></label><label>City <input name="city" maxlength="80"></label>
+      <label>State <input name="state" maxlength="2"></label><label>Taxonomy <input name="taxonomy" maxlength="120"></label>
+      <label>License number <input name="license" maxlength="80" aria-describedby="license-note"></label>
+      <p id="license-note" class="small muted">License source is not connected; this field will say “Cannot check yet.”</p>
+      <button class="b primary">Compare with source</button></form><div id="verify-results" aria-live="polite"></div>`;
+  $("#verify-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const body = Object.fromEntries(new FormData(e.target).entries());
+    try {
+      const result = await api("/api/verify", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+      $("#verify-results").innerHTML = `<div class="card result-card"><h2>Comparison for NPI ${esc(result.npi)}</h2><p class="small muted">${esc(result.note)}</p>
+        <div class="tablewrap"><table class="t"><thead><tr><th>Field</th><th>You entered</th><th>Source record</th><th>Result</th></tr></thead><tbody>${result.fields.map((f) => `<tr><td>${esc(f.field)}</td><td>${esc(f.entered || "—")}</td><td>${esc(f.official || "Unavailable")}</td><td><strong>${esc(f.result)}</strong></td></tr>`).join("")}</tbody></table></div></div>`;
+    } catch (err) { $("#verify-results").innerHTML = `<div class="banner" role="alert">${esc(err.message)}</div>`; }
+  });
+}
+
+async function viewRoster() {
+  app.innerHTML = `<h1>One-time roster check</h1><div class="banner">Synthetic pilot only. This check does not save or continuously monitor a roster. Upload a CSV with exactly one column named <b>npi</b>; do not include patient or clinic data.</div>
+    <form id="roster-form" class="card"><label for="roster-file">Synthetic NPI CSV (up to 100 rows)</label><input id="roster-file" type="file" accept=".csv,text/csv" required><button class="b primary">Check roster</button></form>
+    <div id="roster-results" aria-live="polite"></div>`;
+  $("#roster-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      const file = $("#roster-file").files[0];
+      if (!file || file.size > 4096) throw new Error("CSV must be 4 KB or smaller.");
+      const lines = (await file.text()).trim().split(/\r?\n/);
+      if (lines.shift()?.trim().toLowerCase() !== "npi" || lines.length < 1 || lines.length > 100 || lines.some((line) => !/^\d{10}$/.test(line.trim())))
+        throw new Error("Use exactly one npi column with 1–100 ten-digit rows.");
+      const result = await api("/api/roster/check", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({npis:lines.map((line) => line.trim())})});
+      const counts = result.results.reduce((out, row) => { out[row.label] = (out[row.label] || 0) + 1; return out; }, {});
+      $("#roster-results").innerHTML = `<div class="card result-card"><h2>Roster results</h2><p>${Object.entries(counts).map(([label, n]) => `${esc(label)}: ${n}`).join(" · ")}</p><p class="small muted">${esc(result.note)}</p>
+        <div class="tablewrap"><table class="t"><thead><tr><th>NPI</th><th>Provider</th><th>Result</th><th>Why</th></tr></thead><tbody>${result.results.map((row) => `<tr><td><a href="#/provider/${esc(row.npi)}">${esc(row.npi)}</a></td><td>${esc(row.name)}</td><td>${esc(row.label)}</td><td>${esc(row.reason)}</td></tr>`).join("")}</tbody></table></div></div>`;
+    } catch (err) { $("#roster-results").innerHTML = `<div class="banner" role="alert">${esc(err.message)}</div>`; }
+  });
+}
+
+async function viewLeads() {
+  const items = await api("/api/government/leads");
+  app.innerHTML = `<div class="eyebrow">Government</div><h1>Leads for review</h1><p class="muted">Ranked by current signal score. A lead is a prompt for human review, not a finding of wrongdoing.</p>
+    <div class="kpis"><div class="kpi"><div class="v">${fmtN(items.filter((a) => OPEN.has(a.status)).length)}</div><div class="l">Open leads</div></div><div class="kpi"><div class="v">${fmtN(items.filter((a) => a.tier === "Critical").length)}</div><div class="l">Priority leads</div></div></div>
+    <div class="filters"><label for="lead-state">State</label><select id="lead-state"><option value="">All states</option>${[...new Set(items.map((a) => a.state).filter(Boolean))].sort().map((s) => `<option>${esc(s)}</option>`).join("")}</select>
+      <label for="lead-status">Status</label><select id="lead-status"><option value="">All statuses</option>${[...new Set(items.map((a) => a.status))].sort().map((s) => `<option>${esc(s)}</option>`).join("")}</select></div>
+    <div class="tablewrap"><table class="t"><thead><tr><th>Score</th><th>Provider</th><th>State</th><th>Top reason</th><th>Status</th></tr></thead><tbody id="lead-body"></tbody></table></div>
+    <div class="pager"><span id="lead-count" class="small muted"></span><button class="b" id="lead-prev">Previous</button><button class="b" id="lead-next">Next</button></div>`;
+  let page = 0;
+  const render = () => {
+    const filtered = items.filter((a) => (!$("#lead-state").value || a.state === $("#lead-state").value) && (!$("#lead-status").value || a.status === $("#lead-status").value));
+    page = Math.min(page, Math.max(0, Math.ceil(filtered.length / 10) - 1));
+    $("#lead-body").innerHTML = filtered.slice(page * 10, page * 10 + 10)
+      .map((a) => `<tr class="click" data-href="#/alert/${esc(a.alert_id)}" tabindex="0"><td>${scoreBadge(a.score,a.tier)}</td><td><b>${esc(a.display_name || a.npi)}</b><div class="small muted">${esc(a.npi)}</div></td><td>${esc(a.state)}</td><td>${esc(a.top_reason)}</td><td>${statusTag(a.status)}</td></tr>`).join("") || `<tr><td colspan="5">No leads match these filters.</td></tr>`;
+    $("#lead-count").textContent = filtered.length ? `${page * 10 + 1}–${Math.min(page * 10 + 10, filtered.length)} of ${filtered.length}` : "0 leads";
+    $("#lead-prev").disabled = page === 0; $("#lead-next").disabled = (page + 1) * 10 >= filtered.length;
+  };
+  $("#lead-state").addEventListener("change", () => { page = 0; render(); }); $("#lead-status").addEventListener("change", () => { page = 0; render(); });
+  $("#lead-prev").addEventListener("click", () => { page--; render(); }); $("#lead-next").addEventListener("click", () => { page++; render(); }); render();
+}
+
+async function viewMethodology() {
+  app.innerHTML = `<h1>Methodology &amp; Admin</h1><p class="muted">Inspect how results were produced, evaluated, and reviewed.</p>
+    <div class="journeys"><a class="journey card" href="#/rules"><strong>Rules →</strong><span>Versioned signals and scoring.</span></a><a class="journey card" href="#/sources"><strong>Sources →</strong><span>Source files and freshness.</span></a>
+    <a class="journey card" href="#/scorecard"><strong>Scorecard →</strong><span>Synthetic pilot evaluation.</span></a><a class="journey card" href="#/audit"><strong>Audit log →</strong><span>Recorded review activity.</span></a></div>`;
+}
 
 /* ---------------------------------------------------------------- queue */
 let QUEUE_FILTER = { tier: "All", status: "Open" };
@@ -166,6 +268,9 @@ function reasonCard(h) {
     <div class="txt">${esc(h.reason)}</div>
     ${src ? `<ul class="evid">${src}</ul>` : ""}${claims}</div>`;
 }
+function plainReasonCard(h) {
+  return `<div class="plain-reason"><strong>${esc(h.reason)}</strong><details><summary>View source evidence and rule details</summary>${reasonCard(h)}</details></div>`;
+}
 
 function profileCard(p) {
   const kv = (k, v) => (v ? `<dt>${k}</dt><dd>${v}</dd>` : "");
@@ -176,7 +281,7 @@ function profileCard(p) {
   const ra = (p.reassignments || []).map((r) => esc(title(r.group_name))).join("<br>");
   const orf = p.order_referring ? `In file · Part B ${p.order_referring.partb} · DME ${p.order_referring.dme} · HHA ${p.order_referring.hha}` : (p.entity_type === "1" ? "<b>Not in file</b>" : "");
   const hist = (p.history || []).map((h) => `${mdy(h.change_date)} · ${esc(h.field)}: <span class="small muted">${esc(h.old_value || "")} → </span>${esc(h.new_value || "")}`).join("<br>");
-  return `<div class="card"><h2>Provider profile <span class="small muted">("credit file")</span></h2><dl class="kv">
+  return `<div class="card"><h2>Source profile</h2><dl class="kv">
     ${kv("Name", `<b>${esc(p.display_name)}</b> ${esc(p.credential || "")}`)}
     ${kv("NPI", `<span class="mono">${esc(p.npi)}</span> · type ${p.entity_type === "2" ? "2 (organization)" : "1 (individual)"}`)}
     ${kv("NPPES status", p.status === "Deactivated" ? `<b style="color:var(--red)">Deactivated ${mdy(p.deact_date)}</b>` : `Active${p.react_date ? ` (reactivated ${mdy(p.react_date)})` : ""}`)}
@@ -268,51 +373,61 @@ const graphLegend = `<div class="legend"><span><i style="background:#1f6fb2"></i
 async function viewAlert(id) {
   const d = await api(`/api/alerts/${id}`);
   const a = d.alert, p = d.provider;
+  const assessment = p.status === "Deactivated" ? "Needs attention" : a.tier === "Critical" || a.tier === "High" ? "Needs attention" : "To review";
   const canWrite = ["reviewer", "supervisor", "local_demo"].includes(SESSION.role);
   const canEscalate = ["supervisor", "local_demo"].includes(SESSION.role);
   const closed = ["Dismissed", "Referred"].includes(a.status);
   const disp = d.dispositions.map((x) => `<tr><td>${esc(String(x.ts).slice(0, 16).replace("T", " "))}</td><td>${esc(x.actor)}</td><td>${esc(x.action)}</td><td>${esc(x.supervisor || "")}</td><td>${esc(x.reason || "")}</td></tr>`).join("");
   const related = d.related.filter((r) => r.alert_id !== a.alert_id);
   app.innerHTML = `
-    <p class="small"><a href="#/queue">← Alert queue</a></p>
+    <p class="small"><a href="${MODE === "government" ? "#/leads" : "#/queue"}">← ${MODE === "government" ? "Leads" : "Alerts"}</a></p>
     <div class="banner"><b>Anomaly for human review, not a fraud determination.</b> Reasons below are tied to the exact source file, version, and row.</div>
     <div class="card alerthead">
-      <div><div class="small muted mono">${esc(a.alert_id)} · raised as of ${mdy(a.created_as_of)}</div>
+      <div><div class="small muted mono">${esc(a.alert_id)} · checked as of ${mdy(a.created_as_of)}</div>
         <h1>${esc(p.display_name || a.npi)}</h1>
         <div class="muted"><span class="mono">${esc(a.npi)}</span> · ${esc(p.taxonomy_desc || "")} · ${esc(title(p.city))}, ${esc(p.state)}</div>
-        <div style="margin-top:8px">${statusTag(a.status)} <span class="small muted">fingerprint <span class="mono">${esc(a.fingerprint)}</span></span></div></div>
+        <div class="finding"><strong>${esc(assessment)}</strong><p>${esc(d.hits[0]?.reason || "A signal needs human review.")}</p><div class="small muted">Case: ${statusTag(a.status)} · Source snapshot ${mdy(a.created_as_of)}</div></div></div>
       <div style="text-align:center"><div class="big" style="color:var(--t-${a.tier === "Critical" ? "crit" : a.tier === "High" ? "high" : "elev"})">${a.score}</div><div class="small muted">${esc(a.tier)} · 0–1000</div></div>
       <div class="actions">
-        <button class="b" data-act="review" ${!canWrite || !["New", "Monitoring"].includes(a.status) ? "disabled" : ""}>Start review</button>
+        ${["New", "Monitoring"].includes(a.status) ? `<button class="b primary" data-act="review" ${!canWrite ? "disabled" : ""}>Start review</button>` : `<button class="b primary" id="primary-evidence">Review evidence</button>`}
+        <details class="more-actions"><summary>More case actions</summary><div class="more-action-list">
         <button class="b" data-act="monitor" ${!canWrite || !["New", "In review", "Escalated"].includes(a.status) ? "disabled" : ""}>Monitor</button>
         <button class="b danger" data-act="dismiss" ${!canWrite || closed || a.status === "Escalated" ? "disabled" : ""}>Dismiss</button>
         <button class="b primary" data-act="escalate" ${!canEscalate || !["In review", "Monitoring"].includes(a.status) ? "disabled" : ""}>Escalate</button>
         <button class="b" data-act="reopen" ${!canWrite || a.status !== "Dismissed" ? "disabled" : ""}>Reopen</button>
         <button class="b primary" data-act="refer" ${!canWrite || a.status !== "Escalated" ? "disabled" : ""}>Refer</button>
         <button class="b" id="rerun" ${!canWrite ? "disabled" : ""}>Re-run as of ${mdy(a.created_as_of)}</button>
-        <button class="b" id="pkg" ${canWrite && ["Escalated", "Referred"].includes(a.status) ? "" : "disabled title='Escalate with supervisor sign-off first'"}>Referral package</button>
+        <button class="b" id="pkg" ${canWrite && ["Escalated", "Referred"].includes(a.status) ? "" : "disabled title='Escalate with supervisor sign-off first'"}>Referral package</button></div></details>
       </div>
     </div>
+    <nav class="case-tabs" aria-label="Case sections">${["Why flagged", "Timeline", "Relationships", "Evidence", "Peers", "History"].map((label, i) => `<button class="case-tab ${i === 0 ? "active" : ""}" type="button" data-case-tab="${i}" aria-pressed="${i === 0}">${label}</button>`).join("")}</nav>
     <div id="rerunres"></div>
     <div class="grid g2" style="margin-top:16px">
       <div class="stack">
-        <div class="card"><h2>Reasons (${d.hits.length})</h2>${d.hits.map(reasonCard).join("")}</div>
-        <div class="card"><h2 style="display:flex;align-items:center;gap:8px">Agent draft (L7) <button class="b" id="agentrun" style="margin-left:auto" ${!canWrite ? "disabled" : ""}>Run agents</button></h2><div id="agent"></div></div>
-        <div class="card"><h2>Template case summary</h2><p class="small muted">Assembled from the reasons above. Use Run agents for an evidence-linked draft and QA result.</p>
+        <div class="card" data-case-panel="0"><h2>Why flagged (${d.hits.length})</h2>${d.hits.map((h) => `<div class="plain-reason"><strong>${esc(h.reason)}</strong></div>`).join("")}
+          <p class="small muted">Open Evidence for the dated source records and rule details.</p></div>
+        <div class="card hidden" data-case-panel="3"><h2>Source evidence</h2>${d.hits.map(reasonCard).join("")}</div>
+        <div class="card hidden" data-case-panel="3"><h2 style="display:flex;align-items:center;gap:8px">Evidence-linked draft <button class="b" id="agentrun" style="margin-left:auto" ${!canWrite ? "disabled" : ""}>Run agents</button></h2><div id="agent"></div></div>
+        <div class="card hidden" data-case-panel="3"><h2>Template case summary</h2><p class="small muted">Assembled from the reasons above. Use Run agents for an evidence-linked draft and QA result.</p>
           <ol class="summary">${d.draft_summary.map((s) => `<li>${esc(s)}</li>`).join("")}</ol></div>
-        <div class="card"><h2>Activity timeline</h2>${timelineSvg(p, d.hits)}</div>
-        <div class="card"><h2>Relationship map</h2><div id="graph" class="graph"></div>${graphLegend}</div>
+        <div class="card hidden" data-case-panel="1"><h2>Activity timeline</h2>${timelineSvg(p, d.hits)}</div>
+        <div class="card hidden" data-case-panel="2"><h2>Relationship map</h2><div id="graph" class="graph"></div>${graphLegend}</div>
       </div>
       <div class="stack">
-        ${profileCard(p)}
-        ${peersCard(p)}
-        <div class="card"><h2>Coordination check</h2>${related.length ? `<p class="small">${related.length} other alerts share an address, official, or phone with this provider. Review together to avoid duplicate or conflicting actions.</p>
+        <div class="hidden" data-case-panel="3">${profileCard(p)}</div>
+        <div class="hidden" data-case-panel="4">${peersCard(p) || `<div class="card">Peer data unavailable.</div>`}</div>
+        <div class="card hidden" data-case-panel="2"><h2>Coordination check</h2>${related.length ? `<p class="small">${related.length} other alerts share an address, official, or phone with this provider. Review together to avoid duplicate or conflicting actions.</p>
           <table class="t"><tr><th>Alert</th><th>Score</th><th>Status</th><th>Shared</th></tr>${related.slice(0, 12).map((r) => `<tr class="click" data-href="#/alert/${r.alert_id}"><td class="mono">${r.alert_id}</td><td>${scoreBadge(r.score, r.tier)}</td><td>${statusTag(r.status)}</td><td class="small">${esc(String(r.via).split(":")[0].toLowerCase())}</td></tr>`).join("")}</table>${related.length > 12 ? `<p class="small muted">+${related.length - 12} more</p>` : ""}` : `<p class="small muted">No other open alerts share an address, official, or phone with this provider.</p>`}</div>
-        <div class="card"><h2>Top billed codes</h2><table class="t">${(p.top_codes || []).map((c) => `<tr><td class="mono">${esc(c.hcpcs)}</td><td class="small">${esc(c.descr || "")}</td><td><span class="chip">${esc(c.family || "")}</span></td><td style="text-align:right">${fmtN(c.lines)}</td></tr>`).join("")}</table></div>
-        <div class="card"><h2>Review history</h2>${disp ? `<table class="t"><tr><th>When (UTC)</th><th>Reviewer</th><th>Action</th><th>Supervisor</th><th>Reason</th></tr>${disp}</table>` : `<p class="small muted">No actions yet.</p>`}</div>
+        <div class="card hidden" data-case-panel="3"><h2>Top billed codes</h2><table class="t">${(p.top_codes || []).map((c) => `<tr><td class="mono">${esc(c.hcpcs)}</td><td class="small">${esc(c.descr || "")}</td><td><span class="chip">${esc(c.family || "")}</span></td><td style="text-align:right">${fmtN(c.lines)}</td></tr>`).join("")}</table></div>
+        <div class="card hidden" data-case-panel="5"><h2>Review history</h2>${disp ? `<table class="t"><tr><th>When (UTC)</th><th>Reviewer</th><th>Action</th><th>Supervisor</th><th>Reason</th></tr>${disp}</table>` : `<p class="small muted">No actions yet.</p>`}</div>
       </div>
     </div>`;
-  drawGraph(a.npi, $("#graph"));
+  document.querySelectorAll(".case-tab").forEach((tab) => tab.addEventListener("click", () => {
+    document.querySelectorAll(".case-tab").forEach((button) => { button.classList.toggle("active", button === tab); button.setAttribute("aria-pressed", String(button === tab)); });
+    document.querySelectorAll("[data-case-panel]").forEach((panel) => panel.classList.toggle("hidden", panel.dataset.casePanel !== tab.dataset.caseTab));
+    if (tab.dataset.caseTab === "2") drawGraph(a.npi, $("#graph"));
+  }));
+  $("#primary-evidence")?.addEventListener("click", () => document.querySelector('[data-case-tab="3"]').click());
   loadAgent(a.alert_id);
   document.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => actionModal(a, b.dataset.act)));
   $("#rerun").addEventListener("click", async (e) => {
@@ -359,16 +474,18 @@ async function viewProvider(npi) {
   const d = await api(`/api/providers/${npi}`);
   const p = d.provider;
   app.innerHTML = `<p class="small"><a href="#" data-back="1">← Back</a></p>
-    <div class="card alerthead"><div><div class="small muted">Provider profile</div><h1>${esc(p.display_name || npi)}</h1>
-      <div class="muted"><span class="mono">${esc(npi)}</span> · ${esc(p.taxonomy_desc || "")} · ${esc(title(p.city))}, ${esc(p.state)}</div></div>
+    <div class="card alerthead"><div><div class="small muted">Provider Check · source snapshot ${mdy(d.as_of)}</div><h1>${esc(p.display_name || npi)}</h1>
+      <div class="muted"><span class="mono">${esc(npi)}</span> · ${esc(p.taxonomy_desc || "")} · ${esc(title(p.city))}, ${esc(p.state)}</div>
+      <div class="finding"><strong>${esc(d.assessment.label)}</strong><p>${esc(d.assessment.sentence)}</p></div>
+      <p class="small muted">This result covers the checked pilot sources as of ${mdy(d.as_of)}. It is not credential verification or a fraud finding.</p></div>
       <div style="margin-left:auto;text-align:right">${d.score ? scoreBadge(d.score.score, d.score.tier) : `<span class="score tier-Low">0</span><span class="tiertxt">Low</span>`}
       ${d.alert ? `<div style="margin-top:8px"><a href="#/alert/${d.alert.alert_id}">Open alert ${esc(d.alert.alert_id)} →</a></div>` : `<div class="small muted" style="margin-top:8px">No alert this run</div>`}</div></div>
     <div class="grid g2" style="margin-top:16px"><div class="stack">
-      <div class="card"><h2>Signals (${d.hits.length})</h2>${d.hits.length ? d.hits.map(reasonCard).join("") : `<p class="muted small">No rule fired for this NPI in the latest run.</p>`}</div>
-      <div class="card"><h2>Activity timeline</h2>${timelineSvg(p, d.hits)}</div>
-      <div class="card"><h2>Relationship map</h2><div id="graph" class="graph"></div>${graphLegend}</div>
-    </div><div class="stack">${profileCard(p)}${peersCard(p)}</div></div>`;
-  drawGraph(npi, $("#graph"));
+      <div class="card"><h2>What we found (${d.hits.length})</h2>${d.hits.length ? d.hits.map(plainReasonCard).join("") : `<p class="muted small">No rule fired for this NPI in the latest run.</p>`}</div>
+      <details class="card"><summary>Activity timeline</summary>${timelineSvg(p, d.hits)}</details>
+      <details class="card" id="provider-graph"><summary>Relationship map</summary><div id="graph" class="graph"></div>${graphLegend}</details>
+    </div><div class="stack"><details class="card"><summary>Source profile</summary>${profileCard(p)}</details>${peersCard(p)}</div></div>`;
+  $("#provider-graph").addEventListener("toggle", (e) => { if (e.target.open) drawGraph(npi, $("#graph")); });
 }
 
 /* ---------------------------------------------------------------- scorecard, rules, sources, audit */

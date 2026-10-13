@@ -26,6 +26,7 @@ from .cases import store, case_key, event
 from . import config
 from .ingest import SOURCES
 from .pipeline import audit, connect, latest_run, now, rerun_alert
+from .ux import field_result, npi_valid, provider_assessment
 
 STATIC = Path(__file__).parent / "static"
 app = FastAPI(title="NPI Integrity - reviewer console", version="0.2.0")
@@ -82,8 +83,10 @@ def healthz():
 
 @app.get("/api/session")
 def session(request: Request):
+    role = getattr(request.state, "role", "local_demo")
     return {"actor": getattr(request.state, "actor", None),
-            "role": getattr(request.state, "role", "local_demo"),
+            "role": role,
+            "modes": ["clinic", "government"] if role in ("local_demo", "reviewer", "supervisor") else ["clinic"],
             "data_mode": os.environ.get("NPI_DATA_MODE", "local_demo")}
 
 
@@ -377,7 +380,67 @@ def provider(npi: str):
                                [rid, npi]), rid)
     s = one(cur, "SELECT score, tier FROM scores WHERE run_id = ? AND npi = ?", [rid, npi])
     a = one(cur, "SELECT alert_id FROM alerts WHERE run_id = ? AND npi = ?", [rid, npi])
-    return clean({"provider": p, "hits": hits, "score": s, "alert": a})
+    return clean({"provider": p, "hits": hits, "score": s, "alert": a,
+                  "assessment": provider_assessment(s, hits, p["status"]),
+                  "as_of": one(cur, "SELECT as_of FROM runs WHERE run_id = ?", [rid])["as_of"]})
+
+
+class VerificationInput(BaseModel):
+    npi: str = Field(min_length=10, max_length=10)
+    name: str = Field(default="", max_length=120)
+    city: str = Field(default="", max_length=80)
+    state: str = Field(default="", max_length=2)
+    taxonomy: str = Field(default="", max_length=120)
+    license: str = Field(default="", max_length=80)
+
+
+@app.post("/api/verify")
+def verify_provider(body: VerificationInput):
+    if not npi_valid(body.npi):
+        raise HTTPException(400, "Enter a valid 10-digit NPI")
+    p = one(db(), "SELECT npi, display_name, city, state, taxonomy_desc FROM providers WHERE npi = ?", [body.npi])
+    if not p:
+        raise HTTPException(404, "NPI is not present in the current pilot source snapshot")
+    fields = [("Name", body.name, p["display_name"]), ("City", body.city, p["city"]),
+              ("State", body.state, p["state"]), ("Taxonomy", body.taxonomy, p["taxonomy_desc"]),
+              ("License", body.license, None)]
+    return {"npi": body.npi, "fields": [{"field": label, "entered": entered,
+            "official": official, "result": field_result(entered, official)}
+            for label, entered, official in fields],
+            "note": "Comparison uses the current NPPES snapshot. License data is not connected. Values entered are not saved."}
+
+
+class RosterInput(BaseModel):
+    npis: list[str] = Field(min_length=1, max_length=100)
+
+
+@app.post("/api/roster/check")
+def check_roster(body: RosterInput):
+    if os.environ.get("NPI_DATA_MODE", "local_demo") not in ("local_demo", "synthetic"):
+        raise HTTPException(403, "roster checking is limited to the synthetic pilot")
+    if len(set(body.npis)) != len(body.npis) or any(not npi_valid(n) for n in body.npis):
+        raise HTTPException(400, "Roster requires unique, valid 10-digit NPIs")
+    cur = db()
+    rid = current_run(cur)
+    results = []
+    for npi in body.npis:
+        p = one(cur, "SELECT npi, display_name, status FROM providers WHERE npi = ?", [npi])
+        if not p:
+            results.append({"npi": npi, "name": "Not in pilot snapshot", "label": "Cannot check yet", "reason": "No source record in this pilot"})
+            continue
+        hits = rows(cur, "SELECT reason FROM rule_hits WHERE run_id = ? AND npi = ? ORDER BY hard DESC, weight DESC LIMIT 1", [rid, npi])
+        s = one(cur, "SELECT score, tier FROM scores WHERE run_id = ? AND npi = ?", [rid, npi])
+        assessment = provider_assessment(s, hits, p["status"])
+        results.append({"npi": npi, "name": p["display_name"], "label": assessment["label"],
+                        "reason": assessment["sentence"]})
+    return {"results": results, "saved": False, "note": "One-time synthetic pilot check. No roster is stored or monitored."}
+
+
+@app.get("/api/government/leads")
+def government_leads(request: Request):
+    if getattr(request.state, "role", "local_demo") not in ("local_demo", "reviewer", "supervisor"):
+        raise HTTPException(403, "government view is not enabled for this account")
+    return alerts()
 
 
 @app.get("/api/providers/{npi}/graph")

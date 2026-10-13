@@ -120,3 +120,22 @@ The private console is deployed at [npi-console](https://npi-console-10566432634
 5. Rule weights are placeholders for NeXari to set (open question 3 in the doc). The dispositions table already records the labels for tuning.
 6. Broader adversarial and independent real-data validation beyond the current synthetic tests.
 7. React front end if wanted; the current console is plain JS with no build step.
+
+# Task-focused console pilot
+
+The console now opens on a Clinic / Facility home page with provider search,
+field-level NPPES comparison, and a one-time synthetic roster check. Reviewer
+and supervisor roles can switch to a Government lead queue; the server checks
+that role for `/api/government/leads`. Provider and case pages lead with a
+qualified finding, then reveal source evidence and technical detail. Rules,
+Sources, Scorecard, and Audit live under Methodology & Admin.
+
+The roster endpoint accepts at most 100 unique, checksum-valid NPIs and does
+not persist uploads or monitor them between runs. Verification values are not
+stored; licensing returns “Cannot check yet” until a source is connected.
+These pilot features do not establish clinic tenant or government jurisdiction
+isolation. Keep access limited to the existing internal synthetic pilot. Do not
+use actual patient information or treat “No flagged signals” as credential
+clearance. Tenant membership, jurisdiction-scoped queries, roster persistence,
+notifications, and attestation exports require a separate data-boundary design
+before onboarding external users.
