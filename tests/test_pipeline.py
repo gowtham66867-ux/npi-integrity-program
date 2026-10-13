@@ -264,3 +264,115 @@ def test_historical_summary_keeps_run_selector(client, env):
         assert {x["run_id"] for x in result["runs"]} >= {fake, env["run_id"]}
     finally:
         cur.execute("DELETE FROM runs WHERE run_id = ?", [fake])
+
+
+# --------------------------------------------------------- Task-focused console journeys
+def test_search_opens_the_same_provider_by_npi_or_name(client):
+    tc, api = client
+    p = api.one(api.db(), "SELECT npi, display_name FROM providers WHERE length(display_name) > 8 ORDER BY npi LIMIT 1")
+    by_npi = tc.get("/api/search", params={"q": p["npi"]})
+    by_name = tc.get("/api/search", params={"q": p["display_name"].lower()})
+    assert by_npi.status_code == by_name.status_code == 200
+    assert [x["npi"] for x in by_npi.json()] == [p["npi"]]
+    assert p["npi"] in {x["npi"] for x in by_name.json()}
+    assert tc.get("/api/search", params={"q": "NO_SUCH_PROVIDER_987654"}).json() == []
+
+
+def test_provider_check_qualifies_status_and_links_to_case(client):
+    tc, _ = client
+    alert = tc.get("/api/alerts").json()[0]
+    r = tc.get(f"/api/providers/{alert['npi']}")
+    assert r.status_code == 200
+    detail = r.json()
+    assert detail["provider"]["npi"] == alert["npi"]
+    assert detail["alert"]["alert_id"] == alert["alert_id"]
+    assert detail["assessment"]["label"] in {"Needs attention", "Watching", "To review"}
+    assert detail["assessment"]["sentence"]
+    assert detail["as_of"]
+    assert tc.get("/api/providers/0000000000").status_code == 404
+
+
+def test_verification_reports_each_field_and_does_not_audit_submitted_values(client):
+    tc, api = client
+    p = api.one(api.db(), "SELECT npi, display_name, city, state, taxonomy_desc FROM providers "
+                              "WHERE city IS NOT NULL AND taxonomy_desc IS NOT NULL ORDER BY npi LIMIT 1")
+    audit_before = len(tc.get("/api/audit", params={"limit": 1000}).json())
+    r = tc.post("/api/verify", json={"npi": p["npi"], "name": p["display_name"].lower(),
+                                     "city": "NOT THE CITY", "taxonomy": p["taxonomy_desc"],
+                                     "license": "SYNTHETIC-LICENSE-ONLY"})
+    assert r.status_code == 200
+    fields = {f["field"]: f for f in r.json()["fields"]}
+    assert fields["Name"]["result"] == "Match"
+    assert fields["City"]["result"] == "Differs"
+    assert fields["State"]["result"] == "Not supplied"
+    assert fields["Taxonomy"]["result"] == "Match"
+    assert fields["License"]["result"] == "Cannot check yet"
+    assert fields["License"]["official"] is None
+    assert "not saved" in r.json()["note"].lower()
+    assert len(tc.get("/api/audit", params={"limit": 1000}).json()) == audit_before
+    assert tc.post("/api/verify", json={"npi": "1234567890"}).status_code == 400
+    assert tc.post("/api/verify", json={"npi": "0000000006"}).status_code == 404
+
+
+def test_roster_preserves_row_order_and_never_claims_unknown_npi_is_clear(client, monkeypatch):
+    tc, api = client
+    monkeypatch.setenv("NPI_DATA_MODE", "synthetic")
+    known = api.one(api.db(), "SELECT npi FROM scores ORDER BY npi LIMIT 1")["npi"]
+    unknown = "1234567893"
+    assert api.npi_valid(unknown) and not api.one(api.db(), "SELECT npi FROM providers WHERE npi=?", [unknown])
+    r = tc.post("/api/roster/check", json={"npis": [known, unknown]})
+    assert r.status_code == 200
+    body = r.json()
+    assert [x["npi"] for x in body["results"]] == [known, unknown]
+    assert body["results"][0]["label"] == tc.get(f"/api/providers/{known}").json()["assessment"]["label"]
+    assert body["results"][1]["label"] == "Cannot check yet"
+    assert body["saved"] is False and "No roster is stored" in body["note"]
+
+
+@pytest.mark.parametrize("npis,expected", [
+    ([], 422), (["1234567893"] * 2, 400), (["1234567890"], 400),
+    (["1234567893"] * 101, 422),
+])
+def test_roster_rejects_empty_duplicate_invalid_and_oversized_inputs(client, monkeypatch, npis, expected):
+    tc, _ = client
+    monkeypatch.setenv("NPI_DATA_MODE", "synthetic")
+    assert tc.post("/api/roster/check", json={"npis": npis}).status_code == expected
+
+
+def test_roster_is_blocked_outside_pilot_mode(client, monkeypatch):
+    tc, _ = client
+    monkeypatch.setenv("NPI_DATA_MODE", "real")
+    r = tc.post("/api/roster/check", json={"npis": ["1234567893"]})
+    assert r.status_code == 403
+
+
+def test_government_leads_and_mode_are_role_gated(client, monkeypatch):
+    tc, api = client
+    monkeypatch.setattr(api, "ALLOWED_DOMAIN", "texmed.us")
+    monkeypatch.setenv("NPI_IAP_AUDIENCE", "test-audience")
+    monkeypatch.setenv("NPI_REVIEWERS", "reviewer@texmed.us")
+    from npi_integrity import security
+    monkeypatch.setattr(security, "verify_iap", lambda token, audience: {"email": token, "sub": "test"})
+    viewer = {"x-goog-iap-jwt-assertion": "viewer@texmed.us"}
+    reviewer = {"x-goog-iap-jwt-assertion": "reviewer@texmed.us"}
+    assert tc.get("/api/session", headers=viewer).json()["modes"] == ["clinic"]
+    assert tc.get("/api/government/leads", headers=viewer).status_code == 403
+    assert tc.get("/api/session", headers=reviewer).json()["modes"] == ["clinic", "government"]
+    leads = tc.get("/api/government/leads", headers=reviewer)
+    assert leads.status_code == 200 and leads.json()
+    assert all(x["alert_id"] and x["top_reason"] for x in leads.json())
+
+
+def test_case_workspace_has_dated_reasons_evidence_and_review_history(client):
+    tc, _ = client
+    aid = _an_alert(tc)
+    r = tc.get(f"/api/alerts/{aid}")
+    assert r.status_code == 200
+    case = r.json()
+    assert case["alert"]["alert_id"] == aid
+    assert case["provider"]["npi"] == case["alert"]["npi"]
+    assert case["alert"]["created_as_of"]
+    assert case["hits"] and case["draft_summary"]
+    assert all(h["reason"] and (h["sources"] or h["claims"]) for h in case["hits"])
+    assert "fraud determination" in " ".join(case["draft_summary"]).lower()
+    assert isinstance(case["dispositions"], list)

@@ -15,6 +15,7 @@ uv venv --python 3.11 && uv pip install -e ".[dev]"
 Other commands: `synth`, `run --as-of YYYY-MM-DD`, `scorecard --sweep`, `rerun <alert_id>`, `fetch <source>`.
 Tests: `.venv/bin/python -m pytest -q tests` (end to end, about 20 s).
 `scripts/release_check.py` runs the tests and offline evaluation gates and writes a reviewable report.
+The [console test plan](tests/CONSOLE_TEST_PLAN.md) maps automated cases and deployed-browser acceptance checks to the Clinic and Government journeys.
 GitHub Actions regenerates the synthetic demo and runs that release harness on every push and pull request.
 
 DuckDB allows one writer per file, so stop the console before running `run` or `demo`.
