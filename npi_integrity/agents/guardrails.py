@@ -23,7 +23,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 
-DISCLAIMER = "These are anomalies for human review, not a fraud determination."
+DISCLAIMER = "Potential anomalies require human verification before any decision."
 
 # --------------------------------------------------------------------------- normalization
 _CONFUSABLES = str.maketrans({

@@ -14,15 +14,18 @@
         <path d="M34 6 L6 34" stroke="#2f9e44" stroke-width="9" stroke-linecap="round"/>
         <rect x="16" y="16" width="8" height="8" transform="rotate(45 20 20)" fill="#0f2340"/>
       </svg>
-      <div><b>TeXmed</b> <span class="muted">× NeXari</span><div class="sub">NPI Integrity Monitoring · prototype</div></div>
+      <div><b>TexMed</b> <span class="muted">NPI Integrity</span><div class="sub">Synthetic detection · live NPPES lookup</div></div>
     </div>
+    <div id="mode-switch" class="mode-switch" aria-label="Console view"></div>
     <nav id="nav">
-      <a href="#/queue" data-v="queue">Alert queue</a>
-      <a href="#/watch" data-v="watch">Watch list</a>
-      <a href="#/scorecard" data-v="scorecard">Scorecard</a>
-      <a href="#/rules" data-v="rules">Rules</a>
-      <a href="#/sources" data-v="sources">Sources</a>
-      <a href="#/audit" data-v="audit">Audit log</a>
+      <a href="#/home" data-v="home" data-modes="clinic">Home</a>
+      <a href="#/live" data-v="live">Live NPPES</a>
+      <a href="#/verify" data-v="verify" data-modes="clinic">Verify information</a>
+      <a href="#/roster" data-v="roster" data-modes="clinic">Directory check</a>
+      <a href="#/queue" data-v="queue" data-modes="clinic">Alerts</a>
+      <a href="#/leads" data-v="leads" data-modes="government">Leads</a>
+      <a href="#/watch" data-v="watch" data-modes="government">Watch list</a>
+      <a href="#/methodology" data-v="methodology">Methodology &amp; Admin</a>
     </nav>
     <div class="right">
       <form id="search" autocomplete="off"><input id="q" placeholder="Provider NPI or name · no PHI" aria-label="Search provider NPI or name; do not enter patient information"></form>
