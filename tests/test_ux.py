@@ -76,3 +76,20 @@ def test_score_explanation_respects_family_caps_floor_multiplier_and_ceiling():
     assert result["network_multiplier"] == 1.2
     assert result["hard_floor"] == 900
     assert result["score"] == 1000 and result["tier"] == "Critical"
+
+
+def test_score_explanation_uses_archived_run_and_fails_closed(tmp_path, monkeypatch):
+    monkeypatch.setattr(api.config, "RUNS", tmp_path)
+    archived = tmp_path / "older-run" / "rules"
+    archived.mkdir(parents=True)
+    (archived / "scoring.yaml").write_text("""hard_floor: 900
+alert_threshold: 600
+network_multiplier: 1.2
+family_caps: {C: 550}
+tiers: [{name: Low, min: 0}, {name: Elevated, min: 550}, {name: Critical, min: 900}]
+""")
+    hits = [{"family": "C", "weight": 575, "hard": False, "rule_id": "C-01", "strength": 1}]
+    explanation = api._score_explanation("older-run", hits, 550)
+    assert explanation["score"] == 550 and explanation["alert_threshold"] == 600
+    assert api._score_explanation("older-run", hits, 575) is None
+    assert api._score_explanation("missing-run", hits, 550) is None
