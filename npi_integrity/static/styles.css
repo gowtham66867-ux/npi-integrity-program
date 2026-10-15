@@ -72,6 +72,15 @@ h3 { font-size: 13px; margin: 14px 0 6px; text-transform: uppercase; letter-spac
 .plain-reason { border-left: 4px solid var(--amber); padding: 10px 13px; margin: 8px 0; background: #fffaf0; border-radius: 6px; }
 .plain-reason details { margin-top: 7px; }
 .plain-reason .reason { margin-top: 8px; }
+.score-row { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(110px, 2fr) 52px; gap: 12px; align-items: center; padding: 7px 0; }
+.score-row > div:first-child { display: flex; flex-direction: column; gap: 2px; }
+.score-row strong { font-size: 12px; }
+.score-row span { font-size: 11px; color: var(--muted); }
+.score-row > b { font-size: 13px; text-align: right; }
+.score-track { height: 12px; border-radius: 7px; background: #e5ebf3; overflow: hidden; }
+.score-track i { display: block; height: 100%; background: var(--blue); border-radius: inherit; }
+.score-row:first-of-type .score-track i { background: var(--amber); }
+@media (max-width: 600px) { .score-row { grid-template-columns: minmax(110px, 1fr) minmax(70px, 1fr) 42px; gap: 7px; } }
 .case-tabs { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 18px; border-bottom: 1px solid var(--line); }
 .case-tab { font: inherit; border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--muted); padding: 9px 13px; cursor: pointer; }
 .case-tab.active { color: var(--blue); border-bottom-color: var(--blue); font-weight: 700; }

@@ -29,6 +29,17 @@ from .pipeline import audit, connect, latest_run, now, rerun_alert
 from .ux import field_result, npi_valid, provider_assessment
 from .nppes_live import lookup as lookup_nppes
 from .leie_public import check as check_leie
+from .engine import explain_score
+
+
+def _score_explanation(run_id: str, hits: list[dict], expected: int | None) -> dict | None:
+    """Use the scoring file archived with this run, never today's editable rules."""
+    import yaml
+    path = config.RUNS / run_id / "rules" / "scoring.yaml"
+    if expected is None or not path.is_file():
+        return None
+    explanation = explain_score(hits, yaml.safe_load(path.read_text()))
+    return explanation if explanation["score"] == expected else None
 
 STATIC = Path(__file__).parent / "static"
 app = FastAPI(title="NPI Integrity - reviewer console", version="0.2.0")
@@ -337,7 +348,7 @@ def _draft_summary(p, hits):
     for h in hits:
         cite = ", ".join([s["eid"] for s in h["sources"]] + ([h["claims_eid"]] if h.get("claims_eid") else []))
         out.append(f"{h['reason_code']} ({h['rule_id']} v{h['version']}): {h['reason']}" + (f" [{cite}]" if cite else ""))
-    out.append("These are anomalies for human review, not a fraud determination.")
+    out.append("Potential anomalies require human verification before any decision.")
     return out
 
 
@@ -370,6 +381,7 @@ def _alert_detail(cur, alert_id):
         FROM graph_edges g JOIN mine USING (dst) JOIN alerts a2 ON a2.npi = g.src AND a2.run_id = ?
         WHERE g.src <> ? ORDER BY a2.score DESC LIMIT 60""", [a["npi"], a["run_id"], a["npi"]])
     return clean({"alert": a, "hits": hits, "provider": p, "related": related, "dispositions": [],
+                  "score_explanation": _score_explanation(a["run_id"], hits, a["score"]),
                   "draft_summary": _draft_summary(p, hits), "rules_meta": json.loads(run["rules_json"])})
 
 
@@ -383,6 +395,7 @@ def provider(npi: str):
     s = one(cur, "SELECT score, tier FROM scores WHERE run_id = ? AND npi = ?", [rid, npi])
     a = one(cur, "SELECT alert_id FROM alerts WHERE run_id = ? AND npi = ?", [rid, npi])
     return clean({"provider": p, "hits": hits, "score": s, "alert": a,
+                  "score_explanation": _score_explanation(rid, hits, s["score"] if s else None),
                   "assessment": provider_assessment(s, hits, p["status"]),
                   "as_of": one(cur, "SELECT as_of FROM runs WHERE run_id = ?", [rid])["as_of"]})
 
@@ -574,7 +587,7 @@ def package(alert_id: str, request: Request, actor: str = "reviewer"):
     h1{{font-size:22px}}h2{{font-size:16px;border-bottom:2px solid #2f9e44;padding-bottom:4px;margin-top:28px}}
     table{{border-collapse:collapse;width:100%;font-size:12px}}td,th{{border:1px solid #cbd5e1;padding:4px 6px;text-align:left;vertical-align:top}}
     th{{background:#0f2340;color:#fff}}.note{{background:#fff7e6;border:1px solid #f0b429;padding:8px 12px}}</style></head><body>
-    <p class="note"><b>Anomaly referral, not a fraud determination.</b> Prepared from public and synthetic data
+    <p class="note"><b>Potential anomaly for human verification.</b> Prepared from public and synthetic data
     (prototype). Generated {e(now().isoformat(timespec='seconds'))} UTC by {e(actor)}.</p>
     <h1>Referral package: {e(a['alert_id'])}</h1>
     <table><tr><th>NPI</th><th>Name</th><th>Taxonomy</th><th>Location</th><th>Score</th><th>Status</th></tr>

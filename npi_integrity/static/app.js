@@ -103,7 +103,7 @@ async function viewHome() {
     <p class="small muted">Do not enter patient data. NPPES does not verify licensing or credentialing.</p></section>
     <div class="journeys"><a class="journey card" href="#/home" id="focus-search"><strong>Check a provider →</strong><span>See current signals and the dated evidence.</span></a>
       <a class="journey card" href="#/verify"><strong>Verify our information →</strong><span>Compare your fields with a live NPPES record.</span></a>
-      <a class="journey card" href="#/roster"><strong>Check a roster →</strong><span>Run a one-time check on up to 100 synthetic NPIs.</span></a></div>
+      <a class="journey card" href="#/roster"><strong>Check a directory →</strong><span>Run a one-time check on up to 100 synthetic NPIs.</span></a></div>
     <section class="card"><h2>Synthetic demo signal for review</h2>${first ? `<p><a href="#/alert/${esc(first.alert_id)}">${esc(first.display_name || first.npi)} · ${esc(first.top_reason || "View evidence")} →</a></p>` : `<p class="muted">No current alerts.</p>`}
       <a href="#/queue">Open all alerts →</a></section>`;
   $("#home-search").addEventListener("submit", async (e) => { e.preventDefault(); try { await runSearch($("#home-q").value.trim()); } catch (err) { toast(err.message); } });
@@ -139,7 +139,7 @@ async function viewLiveNppes(npi) {
     <ul><li><strong>NPPES identity:</strong> ${p ? "live lookup above" : "unavailable; no profile conclusion"}.</li>
       <li><strong>OIG LEIE:</strong> dated exact-NPI snapshot above; name-only rows are not checked.</li>
       <li><strong>Medicare annual activity:</strong> not connected yet; no utilization conclusion is available.</li>
-      <li><strong>Claim-level activity and fraud findings:</strong> not connected. The separate alert demo uses synthetic claims.</li></ul></div>`;
+      <li><strong>Claim-level activity:</strong> not connected. The separate potential-anomaly demo uses synthetic claims.</li></ul></div>`;
   if (leieResponse.status === "fulfilled") {
     const {leie} = leieResponse.value;
     const matchRows = leie.matches.map((m) => `<li><strong>${esc(m.name || "Name unavailable")}</strong> · ${esc(m.city || "City unavailable")}, ${esc(m.state || "State unavailable")} · exclusion type ${esc(m.exclusion_type || "unavailable")} · effective ${esc(mdy(String(m.exclusion_date || "").replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3")))}</li>`).join("");
@@ -175,8 +175,8 @@ async function viewVerify() {
 }
 
 async function viewRoster() {
-  app.innerHTML = `<h1>One-time roster check</h1><div class="banner">Synthetic pilot only. This check does not save or continuously monitor a roster. Upload a CSV with exactly one column named <b>npi</b>; do not include patient or clinic data.</div>
-    <form id="roster-form" class="card"><label for="roster-file">Synthetic NPI CSV (up to 100 rows)</label><input id="roster-file" type="file" accept=".csv,text/csv" required><button class="b primary">Check roster</button></form>
+  app.innerHTML = `<h1>One-time directory check</h1><div class="banner">Synthetic pilot only. This check does not save or continuously monitor a directory. Upload a CSV with exactly one column named <b>npi</b>; do not include patient or clinic data.</div>
+    <form id="roster-form" class="card"><label for="roster-file">Synthetic NPI directory CSV (up to 100 rows)</label><input id="roster-file" type="file" accept=".csv,text/csv" required><button class="b primary">Check directory</button></form>
     <div id="roster-results" aria-live="polite"></div>`;
   $("#roster-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -188,7 +188,7 @@ async function viewRoster() {
         throw new Error("Use exactly one npi column with 1–100 ten-digit rows.");
       const result = await api("/api/roster/check", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({npis:lines.map((line) => line.trim())})});
       const counts = result.results.reduce((out, row) => { out[row.label] = (out[row.label] || 0) + 1; return out; }, {});
-      $("#roster-results").innerHTML = `<div class="card result-card"><h2>Roster results</h2><p>${Object.entries(counts).map(([label, n]) => `${esc(label)}: ${n}`).join(" · ")}</p><p class="small muted">${esc(result.note)}</p>
+      $("#roster-results").innerHTML = `<div class="card result-card"><h2>Directory results</h2><p>${Object.entries(counts).map(([label, n]) => `${esc(label)}: ${n}`).join(" · ")}</p><p class="small muted">${esc(result.note)}</p>
         <div class="tablewrap"><table class="t"><thead><tr><th>NPI</th><th>Provider</th><th>Result</th><th>Why</th></tr></thead><tbody>${result.results.map((row) => `<tr><td><a href="#/provider/${esc(row.npi)}">${esc(row.npi)}</a></td><td>${esc(row.name)}</td><td>${esc(row.label)}</td><td>${esc(row.reason)}</td></tr>`).join("")}</tbody></table></div></div>`;
     } catch (err) { $("#roster-results").innerHTML = `<div class="banner" role="alert">${esc(err.message)}</div>`; }
   });
@@ -285,7 +285,7 @@ async function viewQueue() {
       ${statuses.map((v) => `<button data-k="status" data-v="${v}">${v}</button>`).join("")}
     </div>
     <div class="tablewrap queue-table"><table class="t"><thead><tr><th>Score</th><th>Alert</th><th>Provider</th><th>Reason codes</th><th>Top reason</th><th>Status</th></tr></thead><tbody id="qbody"></tbody></table></div>
-    <p class="small muted">Every alert is an anomaly for human review, never a fraud determination. Hard rules (red) are confirmed data facts that set a score floor of 900. Synthetic results do not establish real-world accuracy.</p>`;
+    <p class="small muted">Potential anomalies require human verification. A red rule indicator means the rule met its hard-evidence conditions and sets a 900-point floor; it is not a verdict. <a href="#/rules">How scores and bands work</a>. Synthetic results do not establish real-world accuracy.</p>`;
   document.querySelectorAll(".filters button").forEach((b) => b.addEventListener("click", () => { QUEUE_FILTER[b.dataset.k] = b.dataset.v; render(); }));
   render();
 }
@@ -316,6 +316,15 @@ function reasonCard(h) {
 }
 function plainReasonCard(h) {
   return `<div class="plain-reason"><strong>${esc(h.reason)}</strong><details><summary>View source evidence and rule details</summary>${reasonCard(h)}</details></div>`;
+}
+
+function scoreChart(info) {
+  if (!info) return `<div class="card"><h2>Why this score?</h2><p class="small muted">A verified breakdown is unavailable for this run. See the rule evidence before interpreting the score.</p></div>`;
+  const bar = (label, value, detail) => `<div class="score-row"><div><strong>${esc(label)}</strong><span>${esc(detail)}</span></div><div class="score-track" role="img" aria-label="${esc(label)}: ${fmtN(value)} of 1000 points"><i style="width:${Math.min(100, 100 * value / 1000)}%"></i></div><b>${fmtN(value)}</b></div>`;
+  const familyRows = info.families.map((f) => bar(`${f.family} signal family`, f.points, f.raw > f.points ? `Capped from ${fmtN(f.raw)}` : "After family cap")).join("");
+  return `<div class="card"><h2>Why this score?</h2><p class="small muted">Synthetic rule contributions for this run. Bars show points before the network multiplier; they are not probabilities.</p>
+    ${info.hard_floor ? bar("Hard-evidence floor", info.hard_floor, "At least one hard rule met its evidence conditions") : ""}${familyRows || `<p class="small muted">No weighted signal points.</p>`}
+    <p class="small muted">${info.network_multiplier > 1 ? `Weighted signal points × ${esc(info.network_multiplier)} for a network link. ` : ""}Final score ${fmtN(info.score)} / ${fmtN(info.ceiling)}${info.score === info.ceiling ? " (capped at 1000)" : ""}; alert setting ${fmtN(info.alert_threshold)}. <a href="#/rules">Band definitions and rules</a>.</p></div>`;
 }
 
 function profileCard(p) {
@@ -427,7 +436,7 @@ async function viewAlert(id) {
   const related = d.related.filter((r) => r.alert_id !== a.alert_id);
   app.innerHTML = `
     <p class="small"><a href="${MODE === "government" ? "#/leads" : "#/queue"}">← ${MODE === "government" ? "Leads" : "Alerts"}</a></p>
-    <div class="banner"><b>Anomaly for human review, not a fraud determination.</b> Reasons below are tied to the exact source file, version, and row.</div>
+    <div class="banner"><b>Potential anomaly for human review.</b> Verify the evidence before making a decision. Reasons below are tied to the exact source file, version, and row.</div>
     <div class="card alerthead">
       <div><div class="small muted mono">${esc(a.alert_id)} · checked as of ${mdy(a.created_as_of)}</div>
         <h1>${esc(p.display_name || a.npi)}</h1>
@@ -452,6 +461,7 @@ async function viewAlert(id) {
       <div class="stack">
         <div class="card" data-case-panel="0"><h2>Why flagged (${d.hits.length})</h2>${d.hits.map((h) => `<div class="plain-reason"><strong>${esc(h.reason)}</strong></div>`).join("")}
           <p class="small muted">Open Evidence for the dated source records and rule details.</p></div>
+        <div data-case-panel="0">${scoreChart(d.score_explanation)}</div>
         <div class="card hidden" data-case-panel="3"><h2>Source evidence</h2>${d.hits.map(reasonCard).join("")}</div>
         <div class="card hidden" data-case-panel="3"><h2 style="display:flex;align-items:center;gap:8px">Evidence-linked draft <button class="b" id="agentrun" style="margin-left:auto" ${!canWrite ? "disabled" : ""}>Run agents</button></h2><div id="agent"></div></div>
         <div class="card hidden" data-case-panel="3"><h2>Template case summary</h2><p class="small muted">Assembled from the reasons above. Use Run agents for an evidence-linked draft and QA result.</p>
@@ -523,11 +533,12 @@ async function viewProvider(npi) {
     <div class="card alerthead"><div><div class="small muted">Synthetic demo provider check · source snapshot ${mdy(d.as_of)}</div><h1>${esc(p.display_name || npi)}</h1>
       <div class="muted"><span class="mono">${esc(npi)}</span> · ${esc(p.taxonomy_desc || "")} · ${esc(title(p.city))}, ${esc(p.state)}</div>
       <div class="finding"><strong>${esc(d.assessment.label)}</strong><p>${esc(d.assessment.sentence)}</p></div>
-      <p class="small muted">This synthetic result covers demo sources as of ${mdy(d.as_of)}. It is not the live NPPES record, credential verification, or a fraud finding. <a href="#/live/${esc(npi)}">Check this NPI in live NPPES ↗</a></p></div>
+      <p class="small muted">This synthetic result covers demo sources as of ${mdy(d.as_of)}. It does not verify credentials or establish wrongdoing. <a href="#/live/${esc(npi)}">Check this NPI in live NPPES ↗</a></p></div>
       <div style="margin-left:auto;text-align:right">${d.score ? scoreBadge(d.score.score, d.score.tier) : `<span class="score tier-Low">0</span><span class="tiertxt">Low</span>`}
       ${d.alert ? `<div style="margin-top:8px"><a href="#/alert/${d.alert.alert_id}">Open alert ${esc(d.alert.alert_id)} →</a></div>` : `<div class="small muted" style="margin-top:8px">No alert this run</div>`}</div></div>
     <div class="grid g2" style="margin-top:16px"><div class="stack">
       <div class="card"><h2>What we found (${d.hits.length})</h2>${d.hits.length ? d.hits.map(plainReasonCard).join("") : `<p class="muted small">No rule fired for this NPI in the latest run.</p>`}</div>
+      ${d.score ? scoreChart(d.score_explanation) : ""}
       <details class="card"><summary>Activity timeline</summary>${timelineSvg(p, d.hits)}</details>
       <details class="card" id="provider-graph"><summary>Relationship map</summary><div id="graph" class="graph"></div>${graphLegend}</details>
     </div><div class="stack"><details class="card"><summary>Source profile</summary>${profileCard(p)}</details>${peersCard(p)}</div></div>`;
@@ -570,7 +581,12 @@ async function viewScorecard() {
 
 async function viewRules() {
   const { rules, scoring } = await api("/api/rules");
-  app.innerHTML = `<h1>Rule catalog</h1><p class="muted">Each rule is a versioned YAML file in <span class="mono">rules/</span> with an ID, owner, parameters, SQL, and a reason template. Reviewer dispositions become labels for tuning.</p>
+  const meanings = {Low:"No alert under the current synthetic rules; checked coverage still matters.", Watch:"A weaker signal to revisit as new data arrives.", Elevated:"Meets the current alert setting; review the evidence.", High:"Stronger combined signals; prioritize human review.", Critical:"At least 900 points, often from a hard-evidence rule; verify before acting."};
+  const bandRows = scoring.tiers.map((t, i) => `<tr><td>${esc(t.name)}</td><td>${fmtN(t.min)}–${fmtN((scoring.tiers[i + 1]?.min ?? 1001) - 1)}</td><td>${esc(meanings[t.name] || "Human review required")}</td></tr>`).join("");
+  app.innerHTML = `<h1>Score bands and rule catalog</h1><p class="muted">Draft definitions for NeXari review. This pilot currently has ${rules.length} implemented rules. A score orders synthetic signals for review; it does not measure the probability of wrongdoing.</p>
+    <div class="card" style="margin-bottom:16px"><h2>What the bands mean</h2><div class="tablewrap"><table class="t"><thead><tr><th>Band</th><th>Points</th><th>Plain-language meaning</th></tr></thead><tbody>${bandRows}</tbody></table></div>
+      <p class="small muted">A red rule indicator means its hard-evidence conditions were met and sets a ${scoring.hard_floor}-point floor. High and Critical score colors are prioritization cues, not judgments. The alert setting is ${scoring.alert_threshold}; changing <span class="mono">rules/scoring.yaml</span> requires a reviewed new run and does not rewrite earlier results.</p></div>
+    <p class="muted">Each rule below has a version, owner, parameters, and a plain-language reason. Reviewer decisions provide labels for later tuning.</p>
     <div class="tablewrap"><table class="t"><tr><th>ID</th><th>Signal</th><th>Type</th><th>Weight</th><th>Version</th><th>Phase</th><th>Hits</th><th>Alerts</th><th>Labels</th><th>Parameters</th></tr>
     ${rules.map((r) => `<tr><td><span class="chip ${r.type === "hard" ? "hard" : "soft"}">${esc(r.id)}</span><div class="small mono muted">${esc(r.reason_code)}</div></td>
       <td><b>${esc(r.name)}</b><div class="small muted">${esc(r.description)}</div></td><td>${esc(r.type)}</td><td>${r.type === "hard" ? "floor 900" : r.weight}</td>

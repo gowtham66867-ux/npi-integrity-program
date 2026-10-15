@@ -147,3 +147,30 @@ def score(hits: list[dict], scoring: dict) -> list[dict]:
                     "first_event": min((h["event_date"] for h in hs if h["event_date"]), default=None)})
     out.sort(key=lambda x: (-x["score"], x["npi"]))
     return out
+
+
+def explain_score(hits: list[dict], scoring: dict) -> dict:
+    """Reconstruct a displayed score from the same rules as ``score``.
+
+    Return family contributions after caps, before any network multiplier. A
+    chart must never imply that every rule weight was added without caps.
+    """
+    caps = scoring["family_caps"]
+    totals: dict[str, float] = {}
+    for hit in hits:
+        family = hit["family"]
+        totals[family] = totals.get(family, 0) + float(hit["weight"])
+    families = [{"family": family, "raw": round(raw, 2),
+                 "points": round(min(raw, caps.get(family, 1000)), 2),
+                 "cap": caps.get(family, 1000)}
+                for family, raw in sorted(totals.items()) if raw > 0]
+    hard = any(hit["hard"] for hit in hits)
+    network = any(hit["rule_id"] == "N-01" and hit["strength"] >= 1.0 for hit in hits)
+    soft = sum(row["points"] for row in families)
+    multiplier = scoring["network_multiplier"] if network else 1.0
+    floor = scoring["hard_floor"] if hard else 0
+    total = min(1000, round(floor + soft * multiplier))
+    return {"score": total, "tier": tier_for(total, scoring), "hard_floor": floor,
+            "families": families, "network_multiplier": multiplier,
+            "soft_after_multiplier": round(soft * multiplier, 2),
+            "ceiling": 1000, "alert_threshold": scoring["alert_threshold"]}

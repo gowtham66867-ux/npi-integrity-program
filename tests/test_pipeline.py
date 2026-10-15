@@ -101,6 +101,16 @@ def test_security_headers(client):
     assert r.status_code == 200 and "frame-ancestors 'none'" in r.headers["content-security-policy"]
 
 
+def test_score_breakdown_reconstructs_alert_and_provider_scores(client):
+    tc, _ = client
+    first = tc.get("/api/alerts").json()[0]
+    case = tc.get(f"/api/alerts/{first['alert_id']}").json()
+    assert case["score_explanation"]["score"] == case["alert"]["score"]
+    assert case["score_explanation"]["alert_threshold"] == 550
+    provider = tc.get(f"/api/providers/{first['npi']}").json()
+    assert provider["score_explanation"]["score"] == provider["score"]["score"]
+
+
 def test_disposition_controls(client, env):
     tc, _ = client
     aid = _an_alert(tc)
@@ -382,5 +392,5 @@ def test_case_workspace_has_dated_reasons_evidence_and_review_history(client):
     assert case["alert"]["created_as_of"]
     assert case["hits"] and case["draft_summary"]
     assert all(h["reason"] and (h["sources"] or h["claims"]) for h in case["hits"])
-    assert "fraud determination" in " ".join(case["draft_summary"]).lower()
+    assert "human verification" in " ".join(case["draft_summary"]).lower()
     assert isinstance(case["dispositions"], list)

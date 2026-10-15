@@ -52,6 +52,6 @@ def check(npi: str, *, snapshot: dict | None = None, now: datetime | None = None
         "total_rows": data["total_rows"], "matches": matches,
         "result": "Published NPI match — verify with OIG" if matches else "No exact NPI match in indexed LEIE rows",
         "note": "Most LEIE rows do not publish an NPI. This exact-NPI snapshot check cannot clear a provider, "
-                "does not search name-only rows, and is not a fraud determination. Verify any possible match "
+                "does not search name-only rows. Verify any possible match "
                 "in the official OIG online search before taking action.",
     }

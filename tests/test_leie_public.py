@@ -23,7 +23,7 @@ def test_exact_npi_match_requires_human_verification():
     assert result["matches"][0]["name"] == "EXAMPLE ORGANIZATION"
     assert result["result"] == "Published NPI match — verify with OIG"
     assert result["snapshot_age_days"] == 1 and result["stale"] is False
-    assert "not a fraud determination" in result["note"]
+    assert "official OIG online search" in result["note"]
     assert result["source_sha256"] == "a" * 64
 
 

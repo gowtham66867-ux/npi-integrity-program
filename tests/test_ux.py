@@ -6,6 +6,7 @@ from fastapi import HTTPException
 
 from npi_integrity import api
 from npi_integrity.ux import field_result, npi_valid, provider_assessment
+from npi_integrity.engine import explain_score
 
 
 def test_npi_checksum_and_comparison_states():
@@ -56,3 +57,22 @@ def test_government_leads_requires_server_role(monkeypatch):
     assert exc.value.status_code == 403
     request.state.role = "reviewer"
     assert api.government_leads(request) == [{"alert_id": "A1"}]
+
+
+def test_score_explanation_respects_family_caps_floor_multiplier_and_ceiling():
+    scoring = {"family_caps": {"D": 600, "N": 700}, "network_multiplier": 1.2,
+               "hard_floor": 900, "alert_threshold": 550,
+               "tiers": [{"name": "Low", "min": 0}, {"name": "Critical", "min": 900}]}
+    hits = [
+        {"family": "D", "weight": 500, "hard": True, "rule_id": "D-01", "strength": 1},
+        {"family": "D", "weight": 300, "hard": False, "rule_id": "D-02", "strength": 1},
+        {"family": "N", "weight": 100, "hard": False, "rule_id": "N-01", "strength": 1},
+    ]
+    result = explain_score(hits, scoring)
+    assert result["families"] == [
+        {"family": "D", "raw": 800, "points": 600, "cap": 600},
+        {"family": "N", "raw": 100, "points": 100, "cap": 700},
+    ]
+    assert result["network_multiplier"] == 1.2
+    assert result["hard_floor"] == 900
+    assert result["score"] == 1000 and result["tier"] == "Critical"

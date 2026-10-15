@@ -161,3 +161,20 @@ use actual patient information or treat “No flagged signals” as credential
 clearance. Tenant membership, jurisdiction-scoped queries, roster persistence,
 notifications, and attestation exports require a separate data-boundary design
 before onboarding external users.
+
+## NeXari October 13 feedback update
+
+The clinic UI now calls the one-time synthetic list check **Directory**. Case,
+provider, OIG, agent-summary, and referral copy asks for human verification
+and avoids accusatory results. Provider and case pages explain the stored
+synthetic score with a chart reconstructed from the scoring configuration
+archived with that run; a mismatch suppresses the chart. Methodology shows
+plain-language definitions for all five bands and lists the 18 rules actually
+implemented. The alert threshold remains a versioned `rules/scoring.yaml`
+setting; changing it requires a reviewed new run and does not retroactively
+relabel old cases. See the [feedback response](docs/NEXARI_FEEDBACK_2026-10-13.md)
+and [acceptance cases](tests/NEXARI_FEEDBACK_TEST_CASES.md).
+
+Individual provider subscriptions, paid notifications, a public internet
+watchlist, and state/social-source agents are proposed work. They are not
+represented as active feeds or monitoring in this pilot.
