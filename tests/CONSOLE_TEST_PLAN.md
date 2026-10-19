@@ -31,6 +31,8 @@ This plan verifies the deployed task-focused console without using patient data.
 | A12 | Authentication and request guard | Omit IAP JWT, use wrong domain, send cross-origin write and oversized body. | 403/413 as appropriate; no route side effect. | Existing `test_domain_gate`, `test_cross_origin_write_is_refused`, `test_actual_body_size_is_limited_without_content_length` |
 | A13 | Billing deployment guard | Change approved card, add blocked 6022, expire payment attestation, or change project/account. | Preflight refuses deployment. | Existing `test_billing_policy_fails_closed`, `test_cloud_preflight_requires_matching_company_billing` |
 | A14 | Detection and model guardrails | Run full release harness. | All synthetic detection, decoy, evidence, replay, agent-safety and evaluation gates pass. | `scripts/release_check.py` |
+| A15 | Public-source coverage | Evaluate a dated LEIE snapshot, one older than 45 days, a future date, and a missing index. | Current is labeled dated, old is stale, and future/missing are unavailable; neither state claims exclusion clearance. | `tests/test_dashboard.py` |
+| A16 | Coverage endpoint fallback | Make the LEIE index fail to load. | The dashboard reports LEIE unavailable while still marking NPPES as on-demand, claims as synthetic, and unconnected sources explicitly. | `test_coverage_fails_closed_when_leie_index_cannot_load` |
 
 ## Browser and deployment acceptance cases
 
@@ -52,7 +54,9 @@ This plan verifies the deployed task-focused console without using patient data.
 | M14 | High | Repeat M02–M06 and M11 at 390 px viewport, 200% zoom, keyboard-only, and with a screen reader. | No clipped primary action, trapped focus, unlabeled input, or inaccessible tab/row; record any usability defects. |
 | M15 | Critical | Compare deployed Cloud Run revision and image digest with release artifact; run billing preflight immediately before next deployment. | 100% traffic goes to intended image; service remains IAP protected and synthetic-only; project/account/org match; approved card 8192 attestation is fresh and 6022 is absent. Cloud APIs cannot independently prove card digits. |
 | M16 | Critical | Review GCP BAA, service/data inventory, access logs, retention, incident response, backup restore, and threat model before any real data onboarding. | All required contractual, operational, and technical controls have documented owner and evidence. Until then, no PHI or real patient data is used. |
+| M17 | High | On Clinic Home and Government Leads, inspect the coverage panel. Then search Government leads by NPI/name/reason, filter Open/All and state, paginate, and open a result. | NPPES is labeled on-demand; OIG date/row coverage and stale state are accurate; claims are synthetic; unavailable feeds are explicit. Counts and next steps follow case status, including after a saved disposition. |
+| M18 | High | Open a case from the workbench and follow the three review steps at desktop and 390 px width. | The NPPES link opens the exact NPI, Evidence tab retains dated citations, and the decision guidance matches the saved case status. No step implies a verified fraud finding. |
 
 ## Release decision
 
-For the **synthetic pilot**, require A01–A14, M01–M13, and M15 to pass; record M14 accessibility findings before a broad user rollout. M16 is a hard gate for any PHI/production use. Persistent roster monitoring, tenant isolation, jurisdiction-scoped access, license-source verification, and production attestation exports remain unimplemented and must be tested after they are built.
+For the **synthetic pilot**, require A01–A16, M01–M13, M15, M17, and M18 to pass; record M14 accessibility findings before a broad user rollout. M16 is a hard gate for any PHI/production use. Persistent roster monitoring, tenant isolation, jurisdiction-scoped access, license-source verification, and production attestation exports remain unimplemented and must be tested after they are built.

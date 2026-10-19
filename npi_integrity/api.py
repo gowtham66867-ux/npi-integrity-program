@@ -11,7 +11,7 @@ from collections import Counter
 import json
 import os
 import threading
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -28,7 +28,7 @@ from .ingest import SOURCES
 from .pipeline import audit, connect, latest_run, now, rerun_alert
 from .ux import field_result, npi_valid, provider_assessment
 from .nppes_live import lookup as lookup_nppes
-from .leie_public import check as check_leie
+from .leie_public import check as check_leie, load_snapshot as load_leie_snapshot
 from .engine import explain_score
 
 
@@ -101,6 +101,36 @@ def session(request: Request):
             "role": role,
             "modes": ["clinic", "government"] if role in ("local_demo", "reviewer", "supervisor") else ["clinic"],
             "data_mode": os.environ.get("NPI_DATA_MODE", "local_demo")}
+
+
+def _public_coverage(snapshot: dict, today: date) -> dict:
+    """Describe what the public checks can actually establish, without a provider lookup."""
+    try:
+        as_of = date.fromisoformat(snapshot["source_updated_at"])
+        fetched = datetime.fromisoformat(snapshot["fetched_at"].replace("Z", "+00:00"))
+        if fetched.tzinfo is None or as_of > today:
+            raise ValueError("invalid snapshot date")
+        age_days = (today - as_of).days
+        return {"status": "stale" if age_days > 45 else "dated_snapshot",
+                "source_updated_at": as_of.isoformat(), "fetched_at": fetched.isoformat(),
+                "age_days": age_days, "exact_npi_rows": snapshot["rows_with_npi"],
+                "total_rows": snapshot["total_rows"]}
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return {"status": "unavailable"}
+
+
+@app.get("/api/coverage")
+def coverage():
+    try:
+        leie = _public_coverage(load_leie_snapshot(), datetime.now(timezone.utc).date())
+    except HTTPException:
+        leie = {"status": "unavailable"}
+    return {"nppes": {"status": "on_demand", "scope": "one exact NPI per live request"},
+            "leie": leie,
+            "claims": {"status": "synthetic", "scope": "demo claims; no production claim feed"},
+            "medicare_activity": {"status": "not_connected"},
+            "state_licensing": {"status": "not_connected"},
+            "social_activity": {"status": "not_connected"}}
 
 
 @contextmanager

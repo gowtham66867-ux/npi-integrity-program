@@ -34,6 +34,22 @@ function toast(msg) {
 }
 
 let SUMMARY = null;
+let COVERAGE = null;
+const OPEN = new Set(["New", "In review", "Monitoring", "Escalated"]);
+function nextReviewStep(a) {
+  return ({"New": "Start review", "In review": "Verify evidence", "Monitoring": "Recheck next run",
+    "Escalated": "Consider referral", "Referred": "Referral recorded", "Dismissed": "Review closed"})[a.status] || "Inspect case";
+}
+function coveragePanel() {
+  const leie = COVERAGE?.leie || {status: "unavailable"};
+  const leieText = leie.status === "unavailable" ? "Snapshot unavailable; no exclusion conclusion" :
+    `${leie.status === "stale" ? "Outdated snapshot" : "Dated snapshot"} · source ${mdy(leie.source_updated_at)} · ${fmtN(leie.exact_npi_rows)} of ${fmtN(leie.total_rows)} rows have an NPI`;
+  return `<section class="card coverage-card" aria-label="Data coverage and availability"><div class="section-head"><div><div class="eyebrow">Data coverage</div><h2>What can be checked now</h2></div><a href="#/sources">Pilot file lineage →</a></div>
+    <div class="coverage-grid"><div><span class="coverage-dot live"></span><strong>CMS NPPES</strong><p>Live, one exact NPI on demand. Identity, taxonomy and published address only.</p></div>
+    <div><span class="coverage-dot ${leie.status === "stale" || leie.status === "unavailable" ? "warn" : "dated"}"></span><strong>OIG LEIE</strong><p>${esc(leieText)}. Name-only rows are not checked.</p></div>
+    <div><span class="coverage-dot demo"></span><strong>Activity and scoring</strong><p>Synthetic claims through ${mdy(SUMMARY.claims.hi)}. No live claim-level feed or fraud finding.</p></div>
+    <div><span class="coverage-dot off"></span><strong>Additional live sources</strong><p>Medicare activity, state licenses and social signals are not connected.</p></div></div></section>`;
+}
 async function loadSummary() {
   SESSION = await api("/api/session");
   try { MODE = sessionStorage.getItem("npi.mode") || MODE; } catch {}
@@ -55,6 +71,7 @@ async function loadSummary() {
     $("#reviewer").readOnly = true;
   }
   SUMMARY = await api("/api/summary");
+  try { COVERAGE = await api("/api/coverage"); } catch { COVERAGE = null; }
   const r = SUMMARY.run, c = SUMMARY.claims;
   $("#runbar").innerHTML = `<span>Run <b class="mono">${esc(r.run_id)}</b></span>
     <span>Inputs as of <b>${mdy(r.as_of)}</b></span>
@@ -96,7 +113,7 @@ $("#search").addEventListener("submit", async (e) => {
 
 async function viewHome() {
   const items = await api("/api/alerts");
-  const first = items[0];
+  const first = items.find((a) => OPEN.has(a.status));
   app.innerHTML = `<section class="hero card"><div class="eyebrow">Clinic / Facility</div><h1>What would you like to check?</h1>
     <p class="muted">Enter an exact NPI to check the live CMS record. The alert demo and claims remain synthetic.</p>
     <form id="home-search" class="hero-search"><label for="home-q">10-digit NPI</label><div><input id="home-q" required inputmode="numeric" pattern="[0-9]{10}" maxlength="10" autocomplete="off" placeholder="Enter a 10-digit NPI"><button class="b primary">Check live NPPES</button></div></form>
@@ -104,8 +121,10 @@ async function viewHome() {
     <div class="journeys"><a class="journey card" href="#/home" id="focus-search"><strong>Check a provider →</strong><span>See current signals and the dated evidence.</span></a>
       <a class="journey card" href="#/verify"><strong>Verify our information →</strong><span>Compare your fields with a live NPPES record.</span></a>
       <a class="journey card" href="#/roster"><strong>Check a directory →</strong><span>Run a one-time check on up to 100 synthetic NPIs.</span></a></div>
-    <section class="card"><h2>Synthetic demo signal for review</h2>${first ? `<p><a href="#/alert/${esc(first.alert_id)}">${esc(first.display_name || first.npi)} · ${esc(first.top_reason || "View evidence")} →</a></p>` : `<p class="muted">No current alerts.</p>`}
-      <a href="#/queue">Open all alerts →</a></section>`;
+    ${coveragePanel()}
+    <section class="card home-review"><div class="section-head"><div><div class="eyebrow">Synthetic review workbench</div><h2>${fmtN(items.filter((a) => OPEN.has(a.status)).length)} open cases</h2></div><a href="#/queue">Open case queue →</a></div>
+      ${first ? `<a class="featured-case" href="#/alert/${esc(first.alert_id)}"><span><b>${esc(first.display_name || first.npi)}</b><span class="small muted">${esc(first.top_reason || "View evidence")}</span></span><span>${statusTag(first.status)}<small>${esc(nextReviewStep(first))} →</small></span></a>` : `<p class="muted">No current alerts.</p>`}
+      <p class="small muted">These cases use synthetic claims and dated pilot source files. Review the source record before any real-world decision.</p></section>`;
   $("#home-search").addEventListener("submit", async (e) => { e.preventDefault(); try { await runSearch($("#home-q").value.trim()); } catch (err) { toast(err.message); } });
   $("#focus-search").addEventListener("click", (e) => { e.preventDefault(); $("#home-q").focus(); });
 }
@@ -196,21 +215,32 @@ async function viewRoster() {
 
 async function viewLeads() {
   const items = await api("/api/government/leads");
-  app.innerHTML = `<div class="eyebrow">Government</div><h1>Leads for review</h1><p class="muted">Ranked by current signal score. A lead is a prompt for human review, not a finding of wrongdoing.</p>
-    <div class="kpis"><div class="kpi"><div class="v">${fmtN(items.filter((a) => OPEN.has(a.status)).length)}</div><div class="l">Open leads</div></div><div class="kpi"><div class="v">${fmtN(items.filter((a) => a.tier === "Critical").length)}</div><div class="l">Priority leads</div></div></div>
-    <div class="filters"><label for="lead-state">State</label><select id="lead-state"><option value="">All states</option>${[...new Set(items.map((a) => a.state).filter(Boolean))].sort().map((s) => `<option>${esc(s)}</option>`).join("")}</select>
-      <label for="lead-status">Status</label><select id="lead-status"><option value="">All statuses</option>${[...new Set(items.map((a) => a.status))].sort().map((s) => `<option>${esc(s)}</option>`).join("")}</select></div>
-    <div class="tablewrap"><table class="t"><thead><tr><th>Score</th><th>Provider</th><th>State</th><th>Top reason</th><th>Status</th></tr></thead><tbody id="lead-body"></tbody></table></div>
-    <div class="pager"><span id="lead-count" class="small muted"></span><button class="b" id="lead-prev">Previous</button><button class="b" id="lead-next">Next</button></div>`;
+  app.innerHTML = `<div class="eyebrow">Government · synthetic pilot</div><h1>Review workbench</h1><p class="muted">Work through potential anomalies, verify cited evidence, then record a disposition. Scores prioritize review; they are not fraud probabilities.</p>
+    <div class="kpis"><div class="kpi"><div class="v">${fmtN(items.filter((a) => OPEN.has(a.status)).length)}</div><div class="l">Open leads</div></div>
+      <div class="kpi"><div class="v">${fmtN(items.filter((a) => a.status === "New").length)}</div><div class="l">Awaiting first review</div></div>
+      <div class="kpi"><div class="v">${fmtN(items.filter((a) => a.status === "In review").length)}</div><div class="l">Evidence review underway</div></div>
+      <div class="kpi"><div class="v">${fmtN(items.filter((a) => a.status === "Monitoring").length)}</div><div class="l">Awaiting next run</div></div>
+      <div class="kpi"><div class="v">${fmtN(items.filter((a) => a.status === "Escalated").length)}</div><div class="l">Escalated</div></div></div>
+    ${coveragePanel()}
+    <section class="card worklist-card"><div class="section-head"><div><div class="eyebrow">Action queue</div><h2>Cases needing attention</h2></div><span class="small muted">Select a case to inspect its source evidence</span></div>
+    <div class="filters"><label for="lead-query">Find</label><input id="lead-query" type="search" placeholder="Provider, NPI or reason" aria-label="Find a lead">
+      <label for="lead-state">State</label><select id="lead-state"><option value="">All states</option>${[...new Set(items.map((a) => a.state).filter(Boolean))].sort().map((s) => `<option>${esc(s)}</option>`).join("")}</select>
+      <label for="lead-status">Status</label><select id="lead-status"><option value="Open">Open</option><option value="">All statuses</option>${[...new Set(items.map((a) => a.status))].sort().map((s) => `<option>${esc(s)}</option>`).join("")}</select></div>
+    <div class="tablewrap"><table class="t"><thead><tr><th>Score</th><th>Provider</th><th>State</th><th>Top reason</th><th>Review stage</th><th>Next step</th></tr></thead><tbody id="lead-body"></tbody></table></div>
+    <div class="pager"><span id="lead-count" class="small muted"></span><button class="b" id="lead-prev">Previous</button><button class="b" id="lead-next">Next</button></div></section>`;
   let page = 0;
   const render = () => {
-    const filtered = items.filter((a) => (!$("#lead-state").value || a.state === $("#lead-state").value) && (!$("#lead-status").value || a.status === $("#lead-status").value));
+    const query = $("#lead-query").value.trim().toLowerCase();
+    const filtered = items.filter((a) => (!$("#lead-state").value || a.state === $("#lead-state").value) &&
+      (!$("#lead-status").value || ($("#lead-status").value === "Open" ? OPEN.has(a.status) : a.status === $("#lead-status").value)) &&
+      (!query || [a.display_name, a.npi, a.top_reason].some((value) => String(value || "").toLowerCase().includes(query))));
     page = Math.min(page, Math.max(0, Math.ceil(filtered.length / 10) - 1));
     $("#lead-body").innerHTML = filtered.slice(page * 10, page * 10 + 10)
-      .map((a) => `<tr class="click" data-href="#/alert/${esc(a.alert_id)}" tabindex="0"><td>${scoreBadge(a.score,a.tier)}</td><td><b>${esc(a.display_name || a.npi)}</b><div class="small muted">${esc(a.npi)}</div></td><td>${esc(a.state)}</td><td>${esc(a.top_reason)}</td><td>${statusTag(a.status)}</td></tr>`).join("") || `<tr><td colspan="5">No leads match these filters.</td></tr>`;
+      .map((a) => `<tr class="click" data-href="#/alert/${esc(a.alert_id)}" tabindex="0" role="link" aria-label="Open lead for ${esc(a.display_name || a.npi)}"><td>${scoreBadge(a.score,a.tier)}</td><td><b>${esc(a.display_name || a.npi)}</b><div class="small muted">${esc(a.npi)}</div></td><td>${esc(a.state)}</td><td>${esc(a.top_reason)}</td><td>${statusTag(a.status)}</td><td><a href="#/alert/${esc(a.alert_id)}">${esc(nextReviewStep(a))} →</a></td></tr>`).join("") || `<tr><td colspan="6">No leads match these filters.</td></tr>`;
     $("#lead-count").textContent = filtered.length ? `${page * 10 + 1}–${Math.min(page * 10 + 10, filtered.length)} of ${filtered.length}` : "0 leads";
     $("#lead-prev").disabled = page === 0; $("#lead-next").disabled = (page + 1) * 10 >= filtered.length;
   };
+  $("#lead-query").addEventListener("input", () => { page = 0; render(); });
   $("#lead-state").addEventListener("change", () => { page = 0; render(); }); $("#lead-status").addEventListener("change", () => { page = 0; render(); });
   $("#lead-prev").addEventListener("click", () => { page--; render(); }); $("#lead-next").addEventListener("click", () => { page++; render(); }); render();
 }
@@ -223,7 +253,6 @@ async function viewMethodology() {
 
 /* ---------------------------------------------------------------- queue */
 let QUEUE_FILTER = { tier: "All", status: "Open" };
-const OPEN = new Set(["New", "In review", "Monitoring", "Escalated"]);
 async function viewQueue() {
   const items = await api("/api/alerts");
   const sc = SUMMARY.scorecard, t = SUMMARY.tiers;
@@ -437,6 +466,9 @@ async function viewAlert(id) {
   app.innerHTML = `
     <p class="small"><a href="${MODE === "government" ? "#/leads" : "#/queue"}">← ${MODE === "government" ? "Leads" : "Alerts"}</a></p>
     <div class="banner"><b>Potential anomaly for human review.</b> Verify the evidence before making a decision. Reasons below are tied to the exact source file, version, and row.</div>
+    <div class="review-path card" aria-label="Case review steps"><div><span>1</span><strong>Check identity</strong><small>Confirm the NPI in <a href="#/live/${esc(a.npi)}">live NPPES</a>.</small></div>
+      <div><span>2</span><strong>Review evidence</strong><small>Inspect the dated files and synthetic activity in the Evidence tab.</small></div>
+      <div><span>3</span><strong>Record a decision</strong><small>${esc(nextReviewStep(a))}. Case status: ${esc(a.status)}.</small></div></div>
     <div class="card alerthead">
       <div><div class="small muted mono">${esc(a.alert_id)} · checked as of ${mdy(a.created_as_of)}</div>
         <h1>${esc(p.display_name || a.npi)}</h1>
