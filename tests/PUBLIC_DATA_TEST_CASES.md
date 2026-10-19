@@ -30,7 +30,7 @@ information. Automated cases run with `.venv/bin/python -m pytest -q tests`.
 | PD-16 | High / browser pending | Reload and navigate between a live public provider and a synthetic alert case. | Live page never inherits synthetic activity, peers, case actions, or score; synthetic page stays explicitly labeled. |
 | PD-17 | High / browser pending | Test 390 px width, 200% zoom, keyboard navigation, and a screen reader on the exclusion panel. | Match status, freshness warning, source link, and official verification action are perceivable without clipped text or inaccessible controls. |
 | PD-18 | Critical / release gate | Before deployment, rerun sync, inspect source row counts/hash/date, run full release harness, build wheel, and inspect included snapshot. | Reproducible source provenance; tests/evals pass; built artifact contains the same index hash. A source change requires review. |
-| PD-19 | Critical / deployed pending | Run billing preflight, deploy, authenticate through IAP, inspect `/api/session`, and smoke-test one NPPES and one LEIE lookup. | Correct project/account/card attestation, IAP still private, synthetic mode retained, public source panels render without backend errors. Record revision and image digest. |
+| PD-19 | Critical / deployed pending | Run billing preflight, deploy, authenticate through IAP, inspect `/api/session`, and smoke-test one NPPES and one LEIE lookup. | Correct project, linked TexMed billing account, organization, and budget; IAP still private, synthetic mode retained, public source panels render without backend errors. Record revision and image digest. |
 
 ## Next-source cases, not yet implemented
 

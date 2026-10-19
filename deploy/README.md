@@ -4,11 +4,11 @@ The private console is deployed at [npi-console](https://npi-console-10566432634
 
 ## Required billing evidence
 
-The last verified deployment used billing account `01E4B3-EA09E1-258E11` under `wanologicalsolution.com` (number `267783416603`). The user reported on October 19 that the resources moved to `texmed.pro`; the new project parent and billing account have not been verified because `gowtham@texmed.us` currently cannot access the NPI project or any billing account. The old values remain pinned so deployment fails closed until the migrated resources are identified and approved. Before every deployment, inspect **Payment method** for the approved account and record only the last four digits of every active method. **8192 must be the sole active method**, including backups; **6022** remains explicitly forbidden. Never store a full card number.
+The project is under the `texmed.pro` organization (`878199198137`) and is linked to TexMed Cloud Billing account `01B53D-1B9A75-6E585F`. The October 19 user instruction authorizes using whichever payment method is associated with this TexMed account. The deployment guard checks the live billing link and organization; it does not pin or record card digits. Never store a full card number.
 
-[billing_policy.json](billing_policy.json) records the approved project, account, organization number, primary card last four, active method last fours, inspection timestamp in UTC, and inspector identity. Set `payment_verification_source` to `google_cloud_payment_methods_console`. The attestation expires after 24 hours; refresh it after any payment-method change or before a later deployment.
+[billing_policy.json](billing_policy.json) records the approved deployment identity, project, billing account, organization, and region.
 
-The preflight queries the live project billing link, account status and organization, project parent, and a monthly USD 25 budget with alerts scoped to this project. A budget alert does not cap spending. Cloud Billing's API does **not** expose card digits. The payment console inspection is a human attestation; the code cannot independently prove which card Google will charge at billing time. Do not set an approval from an account name alone.
+The preflight queries the live project billing link, account status and organization, complete project ancestry, and a monthly USD 25 budget with alerts scoped to this project. A budget alert does not cap spending. Cloud Billing's API does **not** expose card digits; the account owner manages its payment method.
 
 ```bash
 .venv/bin/python deploy/preflight.py --policy-only
@@ -18,7 +18,7 @@ The preflight queries the live project billing link, account status and organiza
 ./deploy/deploy_gcp.sh
 ```
 
-`--dry-run` performs the billing preflight without cloud changes. A normal run repeats the preflight after the release checks and before enabling services or creating resources. There are no environment overrides for the forbidden card or approved account. The script uses the pinned identity and project on every `gcloud` command.
+`--dry-run` performs the billing preflight without cloud changes. A normal run repeats the preflight after the release checks and before enabling services or creating resources. The script uses the pinned identity and project on every `gcloud` command.
 
 ## Runtime
 
@@ -66,3 +66,19 @@ checksum overflow fix. Firestore case persistence was not retested on this
 revision; the case storage backend and database configuration were unchanged.
 See [public-data acceptance cases](../tests/PUBLIC_DATA_TEST_CASES.md) for
 remaining source-specific and browser checks.
+
+On October 19, the project was confirmed under `texmed.pro` and linked to
+TexMed billing account `01B53D-1B9A75-6E585F`. A USD 25 monthly alert budget
+was created for project `1056643263413` with 50%, 90%, and 100% thresholds.
+The user approved billing through whichever method is associated with this
+TexMed account, and the deployment policy now verifies the account rather than
+card digits. The release passed 180 tests and 16/16 offline evaluation gates.
+Revision `npi-console-00010-q2r` serves 100% of traffic from image digest
+`sha256:a8e1c7fb5c76b34b9730bd8f7970c03a907263380c92330625de3cfedd2d1bca`.
+IAP and synthetic mode remain enabled. An unauthenticated request redirects to
+Google sign-in; the TexMed Chrome profile loaded the dashboard, `/api/session`
+returned `gowtham@texmed.us` as reviewer with synthetic mode, and exact NPI
+`1447268255` returned live NPPES data and the dated LEIE snapshot. A separate
+in-app browser session received an IAP access denial; access was verified in
+the signed-in TexMed Chrome profile. Firestore case writes were not retested
+on this revision.
