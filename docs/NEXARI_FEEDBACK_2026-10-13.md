@@ -2,6 +2,10 @@
 
 Status: draft for NeXari review, 15 October 2026. This document distinguishes deployed pilot behavior from proposed product work. The source is Lester Steptoe Jr.'s October 13 call notes.
 
+## Dashboard update, 19 October 2026
+
+The Clinic Home and Government Leads screens now show public-source availability alongside the synthetic review run. They distinguish live, per-NPI NPPES lookups; a dated OIG exact-NPI index with its source date and NPI coverage; synthetic claim activity; and live feeds that are not connected. The Government screen adds stage counts, an open-case default, provider/NPI/reason search, and a status-dependent next step. Case pages start with a three-step review path linking to the exact NPI lookup and dated evidence. These changes organize existing checks and cases; they do not add continuous monitoring, live claims, licensing, social feeds, or a fraud determination. The coverage endpoint fails closed when the LEIE snapshot is unavailable. See `tests/test_dashboard.py` and cases A15–A16, M17–M18 in `tests/CONSOLE_TEST_PLAN.md`.
+
 ## Implemented in the pilot update
 
 - **Directory language:** clinic navigation, home action, upload form, and result heading use Directory. The current check accepts only a one-column `npi` CSV with 1–100 distinct, valid synthetic NPIs. It does not save the file or monitor it later.
