@@ -31,7 +31,10 @@ def test_verified_policy_passes():
 
 @pytest.mark.parametrize('changes', [
     {'expected_identity':'personal@gmail.com'}, {'forbidden_card_last4':[]},
-    {'active_payment_method_last4':['8192','6022']}, {'approved_primary_card_last4':'6022'}, {'approved_primary_card_last4':'1234'},
+    {'active_payment_method_last4':['8192','6022']},
+    {'active_payment_method_last4':['8192','1234']},
+    {'active_payment_method_last4':['8192','8192']},
+    {'approved_primary_card_last4':'6022'}, {'approved_primary_card_last4':'1234'},
     {'approved_project':None}, {'approved_billing_account':None}, {'approved_organization':None},
     {'region':'asia-south1'}, {'active_payment_method_last4':[]},
     {'active_payment_method_last4':['full-card-number']},

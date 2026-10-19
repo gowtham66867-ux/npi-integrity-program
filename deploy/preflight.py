@@ -1,4 +1,4 @@
-"""Fail-closed deployment billing guard. Card 6022 cannot be overridden by env vars.
+"""Fail-closed deployment billing guard. Only card 8192 is allowed.
 
 Cloud Billing APIs expose the billing account, not its cards. A recent payment
 console inspection is mandatory; account names or an email are not card proof.
@@ -36,10 +36,10 @@ def validate_policy(p, now=None):
     cards = p.get('active_payment_method_last4', [])
     if not cards or any(not isinstance(c, str) or not re.fullmatch(r'\d{4}', c) for c in cards):
         raise Refused('all active payment method last-four digits must be recorded')
-    if p['approved_primary_card_last4'] not in cards:
-        raise Refused('approved primary card is not among verified active methods')
     if set(cards) & (set(p['forbidden_card_last4']) | {'6022'}):
         raise Refused('card ending 6022 or another blocked card is active; deployment refused')
+    if cards != ['8192']:
+        raise Refused('8192 must be the only active payment method; deployment refused')
     if p['payment_methods_verified_by'].lower() != 'gowtham@texmed.us':
         raise Refused('payment verification must be for the authorized company identity')
     if p['payment_verification_source'] != 'google_cloud_payment_methods_console':

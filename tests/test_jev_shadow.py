@@ -75,6 +75,8 @@ def test_typesafe_billing_requires_fresh_approved_method():
     verify_typesafe_billing(billing_policy(), now)
     for changes in ({"primary_card_last4": "6022"},
                     {"active_payment_method_last4": ["8192", "6022"]},
+                    {"active_payment_method_last4": ["8192", "1234"]},
+                    {"active_payment_method_last4": ["8192", "8192"]},
                     {"verified_at": "2026-10-08T08:00:00+00:00"},
                     {"source": "google_cloud_payment_methods_console"}):
         with pytest.raises(ValueError):
