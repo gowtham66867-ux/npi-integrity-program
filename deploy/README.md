@@ -82,3 +82,13 @@ returned `gowtham@texmed.us` as reviewer with synthetic mode, and exact NPI
 in-app browser session received an IAP access denial; access was verified in
 the signed-in TexMed Chrome profile. Firestore case writes were not retested
 on this revision.
+
+On October 20, revision `npi-console-00011-twg` was deployed to the same TexMed
+project and serves 100% of traffic. The deployment preflight verified
+`gowtham@texmed.us`, the live linked billing account, organization ancestry,
+and a project-scoped budget. The release passed 183 tests and 16/16 offline
+evaluation gates. IAP and synthetic mode remain enabled. Authenticated Chrome
+smoke checks loaded Home, the one-click synthetic sample, live NPPES field
+comparison, and a saved synthetic directory. A Firestore-backed directory
+survived reload and a manual recheck. An unauthenticated API request redirected
+to Google sign-in. Scheduled checks and notifications are not configured.

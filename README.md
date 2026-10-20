@@ -125,7 +125,8 @@ The private console is deployed at [npi-console](https://npi-console-10566432634
 # Task-focused console pilot
 
 The console now opens on a Clinic / Facility home page with provider search,
-field-level NPPES comparison, and a one-time synthetic roster check. Exact NPI
+field-level NPPES comparison, a one-click synthetic sample, and a saved
+user-scoped synthetic directory with manual recheck. Exact NPI
 searches and the comparison form now make a read-only request to the official
 NPPES Registry API v2.1. The result is labeled live, includes the Registry
 record's update date and link, and is never joined to synthetic scores, alerts,
@@ -140,9 +141,15 @@ that role for `/api/government/leads`. Provider and case pages lead with a
 qualified finding, then reveal source evidence and technical detail. Rules,
 Sources, Scorecard, and Audit live under Methodology & Admin.
 
-The roster endpoint accepts at most 100 unique, checksum-valid NPIs and does
-not persist uploads or monitor them between runs. Verification values are not
-stored; licensing returns “Cannot check yet” until a source is connected.
+The directory endpoint accepts at most 100 unique, checksum-valid NPIs and
+persists only those NPIs and synthetic check results per signed-in user in
+Firestore. Users can recheck manually, see status changes, and delete their
+directory. Scheduled checks and notifications are not enabled. Verification
+compares the published street address, ZIP, city, state, name, and taxonomy;
+entered values are not stored. Licensing returns “Cannot check yet” until a
+separate source is connected. See
+[implementation status](docs/UX_IMPLEMENTATION_2026-10-20.md) for the exact
+scope and remaining gaps.
 
 The live provider page also shows a **dated HHS-OIG LEIE exact-NPI snapshot**,
 built from the public `UPDATED.csv` download. Its minimal packaged index keeps
