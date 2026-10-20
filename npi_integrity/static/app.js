@@ -117,10 +117,11 @@ async function viewHome() {
   app.innerHTML = `<section class="hero card"><div class="eyebrow">Clinic / Facility</div><h1>What would you like to check?</h1>
     <p class="muted">Enter an exact NPI to check the live CMS record. The alert demo and claims remain synthetic.</p>
     <form id="home-search" class="hero-search"><label for="home-q">10-digit NPI</label><div><input id="home-q" required inputmode="numeric" pattern="[0-9]{10}" maxlength="10" autocomplete="off" placeholder="Enter a 10-digit NPI"><button class="b primary">Check live NPPES</button></div></form>
-    <p class="small muted">Do not enter patient data. NPPES does not verify licensing or credentialing.</p></section>
+    <p class="small muted">Do not enter patient data. NPPES does not verify licensing or credentialing.</p>
+    <p class="small"><a href="#/provider/1136934696">Try a synthetic sample: Gregory N Darick, NPI 1136934696 →</a></p></section>
     <div class="journeys"><a class="journey card" href="#/home" id="focus-search"><strong>Check a provider →</strong><span>See current signals and the dated evidence.</span></a>
       <a class="journey card" href="#/verify"><strong>Verify our information →</strong><span>Compare your fields with a live NPPES record.</span></a>
-      <a class="journey card" href="#/roster"><strong>Check a directory →</strong><span>Run a one-time check on up to 100 synthetic NPIs.</span></a></div>
+      <a class="journey card" href="#/roster"><strong>Monitor my directory →</strong><span>Save up to 100 synthetic NPIs and recheck them manually.</span></a></div>
     ${coveragePanel()}
     <section class="card home-review"><div class="section-head"><div><div class="eyebrow">Synthetic review workbench</div><h2>${fmtN(items.filter((a) => OPEN.has(a.status)).length)} open cases</h2></div><a href="#/queue">Open case queue →</a></div>
       ${first ? `<a class="featured-case" href="#/alert/${esc(first.alert_id)}"><span><b>${esc(first.display_name || first.npi)}</b><span class="small muted">${esc(first.top_reason || "View evidence")}</span></span><span>${statusTag(first.status)}<small>${esc(nextReviewStep(first))} →</small></span></a>` : `<p class="muted">No current alerts.</p>`}
@@ -177,8 +178,9 @@ async function viewLiveNppes(npi) {
 async function viewVerify() {
   app.innerHTML = `<h1>Verify our information</h1><p class="muted">Compare your fields with a live CMS NPPES lookup for one exact NPI. Values entered are not saved; do not enter patient data.</p>
     <form id="verify-form" class="card field-form"><label>NPI <input name="npi" inputmode="numeric" pattern="[0-9]{10}" maxlength="10" required></label>
-      <label>Name <input name="name" maxlength="120"></label><label>City <input name="city" maxlength="80"></label>
-      <label>State <input name="state" maxlength="2"></label><label>Taxonomy <input name="taxonomy" maxlength="120"></label>
+      <label>Name <input name="name" maxlength="120"></label><label>Street address <input name="street_address" maxlength="160"></label>
+      <label>City <input name="city" maxlength="80"></label><label>State <input name="state" maxlength="2"></label>
+      <label>ZIP <input name="zip_code" maxlength="10"></label><label>Taxonomy <input name="taxonomy" maxlength="120"></label>
       <label>License number <input name="license" maxlength="80" aria-describedby="license-note"></label>
       <p id="license-note" class="small muted">License source is not connected; this field will say “Cannot check yet.”</p>
       <button class="b primary">Compare with source</button></form><div id="verify-results" aria-live="polite"></div>`;
@@ -187,16 +189,31 @@ async function viewVerify() {
     const body = Object.fromEntries(new FormData(e.target).entries());
     try {
       const result = await api("/api/verify", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
-      $("#verify-results").innerHTML = `<div class="card result-card"><h2>Comparison for NPI ${esc(result.npi)}</h2><p class="small muted">${esc(result.source)} · record updated ${mdy(result.last_updated)}. ${esc(result.note)} <a href="${esc(result.source_url)}" target="_blank" rel="noopener noreferrer">Open CMS record ↗</a></p>
+      $("#verify-results").innerHTML = `<div class="card result-card print-area"><h2>Comparison for NPI ${esc(result.npi)}</h2><p class="small muted">${esc(result.source)} · record updated ${mdy(result.last_updated)} · retrieved ${esc(result.retrieved_at || "time unavailable")}. ${esc(result.note)} <a href="${esc(result.source_url)}" target="_blank" rel="noopener noreferrer">Open CMS record ↗</a></p>
+        <button class="b print-action" type="button" onclick="window.print()">Print / save PDF</button>
         <div class="tablewrap"><table class="t"><thead><tr><th>Field</th><th>You entered</th><th>Source record</th><th>Result</th></tr></thead><tbody>${result.fields.map((f) => `<tr><td>${esc(f.field)}</td><td>${esc(f.entered || "—")}</td><td>${esc(f.official || "Unavailable")}</td><td><strong>${esc(f.result)}</strong></td></tr>`).join("")}</tbody></table></div></div>`;
     } catch (err) { $("#verify-results").innerHTML = `<div class="banner" role="alert">${esc(err.message)}</div>`; }
   });
 }
 
 async function viewRoster() {
-  app.innerHTML = `<h1>One-time directory check</h1><div class="banner">Synthetic pilot only. This check does not save or continuously monitor a directory. Upload a CSV with exactly one column named <b>npi</b>; do not include patient or clinic data.</div>
-    <form id="roster-form" class="card"><label for="roster-file">Synthetic NPI directory CSV (up to 100 rows)</label><input id="roster-file" type="file" accept=".csv,text/csv" required><button class="b primary">Check directory</button></form>
+  app.innerHTML = `<h1>My synthetic directory</h1><div class="banner">Save only pilot NPIs. Rechecks are manual; scheduled checks and notifications are not enabled. Upload a CSV with exactly one column named <b>npi</b>; do not include patient or clinic data.</div>
+    <form id="roster-form" class="card"><label for="roster-file">Synthetic NPI directory CSV (up to 100 rows)</label><input id="roster-file" type="file" accept=".csv,text/csv" required><button class="b primary">Save and check directory</button></form>
     <div id="roster-results" aria-live="polite"></div>`;
+  const renderDirectory = (result) => {
+    if (!result.saved) { $("#roster-results").innerHTML = `<p class="muted">No saved directory yet.</p>`; return; }
+    const counts = result.results.reduce((out, row) => { out[row.label] = (out[row.label] || 0) + 1; return out; }, {});
+    $("#roster-results").innerHTML = `<div class="card result-card print-area"><h2>Saved directory results</h2>
+      <p>${Object.entries(counts).map(([label, n]) => `${esc(label)}: ${n}`).join(" · ")}</p>
+      <p class="small muted">Pilot inputs as of ${mdy(result.as_of)} · checked ${esc(result.last_checked_at)}. ${esc(result.note)}</p>
+      <p>${(result.changes || []).length ? `${result.changes.length} changed result(s) since the previous check.` : "No result-status changes since the previous check."}</p>
+      <div class="print-action"><button class="b" id="directory-recheck">Recheck now</button> <button class="b" onclick="window.print()">Print / save attestation</button> <button class="b danger" id="directory-delete">Delete directory</button></div>
+      <div class="tablewrap"><table class="t"><thead><tr><th>NPI</th><th>Provider</th><th>Result</th><th>Why</th></tr></thead><tbody>${result.results.map((row) => `<tr><td><a href="#/provider/${esc(row.npi)}">${esc(row.npi)}</a></td><td>${esc(row.name)}</td><td>${esc(row.label)}</td><td>${esc(row.reason)}</td></tr>`).join("")}</tbody></table></div>
+      <p class="small muted">Attestation of a completed synthetic pilot check only. This is not credential or exclusion clearance.</p></div>`;
+    $("#directory-recheck").onclick = async () => { try { renderDirectory(await api("/api/directory/recheck", {method:"POST"})); } catch (e) { toast(e.message); } };
+    $("#directory-delete").onclick = async () => { if (!confirm("Delete your saved synthetic directory?")) return; try { await api("/api/directory", {method:"DELETE"}); renderDirectory({saved:false}); } catch (e) { toast(e.message); } };
+  };
+  try { renderDirectory(await api("/api/directory")); } catch (e) { $("#roster-results").innerHTML = `<div class="banner" role="alert">${esc(e.message)}</div>`; }
   $("#roster-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     try {
@@ -205,10 +222,8 @@ async function viewRoster() {
       const lines = (await file.text()).trim().split(/\r?\n/);
       if (lines.shift()?.trim().toLowerCase() !== "npi" || lines.length < 1 || lines.length > 100 || lines.some((line) => !/^\d{10}$/.test(line.trim())))
         throw new Error("Use exactly one npi column with 1–100 ten-digit rows.");
-      const result = await api("/api/roster/check", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({npis:lines.map((line) => line.trim())})});
-      const counts = result.results.reduce((out, row) => { out[row.label] = (out[row.label] || 0) + 1; return out; }, {});
-      $("#roster-results").innerHTML = `<div class="card result-card"><h2>Directory results</h2><p>${Object.entries(counts).map(([label, n]) => `${esc(label)}: ${n}`).join(" · ")}</p><p class="small muted">${esc(result.note)}</p>
-        <div class="tablewrap"><table class="t"><thead><tr><th>NPI</th><th>Provider</th><th>Result</th><th>Why</th></tr></thead><tbody>${result.results.map((row) => `<tr><td><a href="#/provider/${esc(row.npi)}">${esc(row.npi)}</a></td><td>${esc(row.name)}</td><td>${esc(row.label)}</td><td>${esc(row.reason)}</td></tr>`).join("")}</tbody></table></div></div>`;
+      const result = await api("/api/directory", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({npis:lines.map((line) => line.trim())})});
+      renderDirectory(result);
     } catch (err) { $("#roster-results").innerHTML = `<div class="banner" role="alert">${esc(err.message)}</div>`; }
   });
 }
@@ -565,16 +580,24 @@ async function viewProvider(npi) {
     <div class="card alerthead"><div><div class="small muted">Synthetic demo provider check · source snapshot ${mdy(d.as_of)}</div><h1>${esc(p.display_name || npi)}</h1>
       <div class="muted"><span class="mono">${esc(npi)}</span> · ${esc(p.taxonomy_desc || "")} · ${esc(title(p.city))}, ${esc(p.state)}</div>
       <div class="finding"><strong>${esc(d.assessment.label)}</strong><p>${esc(d.assessment.sentence)}</p></div>
-      <p class="small muted">This synthetic result covers demo sources as of ${mdy(d.as_of)}. It does not verify credentials or establish wrongdoing. <a href="#/live/${esc(npi)}">Check this NPI in live NPPES ↗</a></p></div>
+      <p class="small muted">This synthetic result covers demo sources as of ${mdy(d.as_of)}. It does not verify credentials or establish wrongdoing. <a href="#/live/${esc(npi)}">Check this NPI in live NPPES ↗</a></p><button class="b" type="button" onclick="window.print()">Print / save provider check</button></div>
       <div style="margin-left:auto;text-align:right">${d.score ? scoreBadge(d.score.score, d.score.tier) : `<span class="score tier-Low">0</span><span class="tiertxt">Low</span>`}
       ${d.alert ? `<div style="margin-top:8px"><a href="#/alert/${d.alert.alert_id}">Open alert ${esc(d.alert.alert_id)} →</a></div>` : `<div class="small muted" style="margin-top:8px">No alert this run</div>`}</div></div>
-    <div class="grid g2" style="margin-top:16px"><div class="stack">
-      <div class="card"><h2>What we found (${d.hits.length})</h2>${d.hits.length ? d.hits.map(plainReasonCard).join("") : `<p class="muted small">No rule fired for this NPI in the latest run.</p>`}</div>
-      ${d.score ? scoreChart(d.score_explanation) : ""}
-      <details class="card"><summary>Activity timeline</summary>${timelineSvg(p, d.hits)}</details>
-      <details class="card" id="provider-graph"><summary>Relationship map</summary><div id="graph" class="graph"></div>${graphLegend}</details>
-    </div><div class="stack"><details class="card"><summary>Source profile</summary>${profileCard(p)}</details>${peersCard(p)}</div></div>`;
-  $("#provider-graph").addEventListener("toggle", (e) => { if (e.target.open) drawGraph(npi, $("#graph")); });
+    <nav class="case-tabs" aria-label="Provider sections">${["Summary", "Identity", "Licenses", "Exclusions", "Activity", "Evidence"].map((label, i) => `<button class="case-tab ${i === 0 ? "active" : ""}" type="button" data-provider-tab="${i}" aria-pressed="${i === 0}">${label}</button>`).join("")}</nav>
+    <div class="stack" style="margin-top:16px">
+      <section class="card" data-provider-panel="0"><h2>What we found (${d.hits.length})</h2>${d.hits.length ? d.hits.map(plainReasonCard).join("") : `<p class="muted small">No rule fired for this NPI in the latest run.</p>`}</section>
+      <div data-provider-panel="0">${d.score ? scoreChart(d.score_explanation) : ""}</div>
+      <section class="hidden" data-provider-panel="1">${profileCard(p)}<p class="small muted">This is the synthetic pilot source profile. <a href="#/live/${esc(npi)}">Open a separate live CMS NPPES lookup</a>.</p></section>
+      <section class="card hidden" data-provider-panel="2"><h2>Licenses</h2><div class="banner">Cannot check yet. State licensing sources are not connected; NPPES does not verify licenses.</div></section>
+      <section class="card hidden" data-provider-panel="3"><h2>Exclusions</h2><p>Review the dated synthetic source evidence below and confirm any possible match at the official source.</p>${(p.exclusions || []).length ? `<p>${p.exclusions.length} pilot exclusion match(es) require identity review.</p>` : `<p>No pilot exclusion match is recorded. This is not exclusion clearance.</p>`}<a href="#/live/${esc(npi)}">Check dated public OIG exact-NPI snapshot →</a></section>
+      <section class="hidden" data-provider-panel="4"><div class="card"><h2>Synthetic claim activity</h2>${timelineSvg(p, d.hits)}</div>${peersCard(p) || `<div class="card">Peer comparison unavailable.</div>`}</section>
+      <section class="hidden" data-provider-panel="5"><div class="card"><h2>Rule and source evidence</h2>${d.hits.map(reasonCard).join("") || `<p class="muted">No rule evidence in this run.</p>`}</div><div class="card" id="provider-graph"><h2>Relationship map</h2><div id="graph" class="graph"></div>${graphLegend}</div></section>
+    </div>`;
+  document.querySelectorAll("[data-provider-tab]").forEach((tab) => tab.addEventListener("click", () => {
+    document.querySelectorAll("[data-provider-tab]").forEach((button) => { button.classList.toggle("active", button === tab); button.setAttribute("aria-pressed", String(button === tab)); });
+    document.querySelectorAll("[data-provider-panel]").forEach((panel) => panel.classList.toggle("hidden", panel.dataset.providerPanel !== tab.dataset.providerTab));
+    if (tab.dataset.providerTab === "5") drawGraph(npi, $("#graph"));
+  }));
 }
 
 /* ---------------------------------------------------------------- scorecard, rules, sources, audit */

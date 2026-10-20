@@ -219,3 +219,12 @@ svg text { font-family: inherit; }
   .kv { grid-template-columns: 1fr; }
   .kv dt { margin-top: 5px; }
 }
+
+@media print {
+  header, nav, .runbar, .print-action, .toast, .modal, .mode-switch { display: none !important; }
+  body { background: #fff; color: #111; }
+  main { max-width: none; padding: 0; }
+  .card, .tablewrap { border-color: #aaa; break-inside: avoid; }
+  details { display: block; }
+  a { color: #111; text-decoration: underline; }
+}

@@ -32,6 +32,22 @@ def field_result(submitted: str, official: str | None) -> str:
     return "Match" if norm(submitted) == norm(official) else "Differs"
 
 
+def compared_field(field: str, submitted: str, official: str | None) -> str:
+    """Allow only explainable near matches; never fuzzy-match identity or licenses."""
+    exact = field_result(submitted, official)
+    if exact != "Differs":
+        return exact
+    if field == "ZIP" and len(norm(submitted)) == 5 and norm(official).startswith(norm(submitted)):
+        return "Close match"
+    if field == "Street address":
+        suffixes = {"STREET": "ST", "ROAD": "RD", "AVENUE": "AVE", "BOULEVARD": "BLVD", "DRIVE": "DR", "LANE": "LN"}
+        def tokens(value):
+            return [suffixes.get(token, token) for token in re.findall(r"[A-Z0-9]+", value.upper())]
+        if tokens(submitted) == tokens(official):
+            return "Close match"
+    return "Differs"
+
+
 def provider_assessment(score: dict | None, hits: list[dict], status: str) -> dict:
     """Describe observed signals without implying credential or billing clearance."""
     if status == "Deactivated":

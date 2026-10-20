@@ -51,6 +51,7 @@ def lookup(npi: str) -> dict:
         "npi": npi, "name": name or "Name unavailable", "entity_type": entity_type,
         "status": status, "taxonomy": primary.get("desc"), "taxonomy_code": primary.get("code"),
         "city": location.get("city"), "state": location.get("state"),
+        "street_address": " ".join(filter(None, [location.get("address_1"), location.get("address_2")])),
         "postal_code": location.get("postal_code"),
         "enumeration_date": basic.get("enumeration_date"),
         "last_updated": basic.get("last_updated"),

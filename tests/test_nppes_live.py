@@ -17,7 +17,7 @@ def test_exact_public_npi_lookup(monkeypatch):
         return response({"result_count": 1, "results": [{"number": "1447268255", "enumeration_type": "NPI-2",
             "basic": {"organization_name": "APRIA HEALTHCARE LLC", "status": "A", "last_updated": "2024-04-19"},
             "addresses": [{"address_purpose": "MAILING", "city": "INDIANAPOLIS", "state": "IN"},
-                          {"address_purpose": "LOCATION", "city": "BATON ROUGE", "state": "LA"}],
+                          {"address_purpose": "LOCATION", "address_1": "100 MAIN STREET", "address_2": "SUITE 2", "city": "BATON ROUGE", "state": "LA", "postal_code": "70801-1234"}],
             "taxonomies": [{"desc": "Supplies", "code": "332B00000X", "primary": True}]}]})
     monkeypatch.setattr(nppes_live.httpx, "get", get)
     result = nppes_live.lookup("1447268255")
@@ -25,6 +25,8 @@ def test_exact_public_npi_lookup(monkeypatch):
     assert seen["params"] == {"version": "2.1", "number": "1447268255"}
     assert result["name"] == "APRIA HEALTHCARE LLC"
     assert (result["city"], result["state"], result["status"]) == ("BATON ROUGE", "LA", "Active")
+    assert result["street_address"] == "100 MAIN STREET SUITE 2"
+    assert result["postal_code"] == "70801-1234"
     assert "score" not in result and "claims" not in result
 
 

@@ -22,11 +22,12 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 from .security import authenticate, actor_for
 from .cases import store, case_key, event
+from .directory import store as directory_store, owner_key, utcnow
 
 from . import config
 from .ingest import SOURCES
 from .pipeline import audit, connect, latest_run, now, rerun_alert
-from .ux import field_result, npi_valid, provider_assessment
+from .ux import compared_field, npi_valid, provider_assessment
 from .nppes_live import lookup as lookup_nppes
 from .leie_public import check as check_leie, load_snapshot as load_leie_snapshot
 from .engine import explain_score
@@ -445,8 +446,10 @@ def public_integrity(npi: str):
 class VerificationInput(BaseModel):
     npi: str = Field(min_length=10, max_length=10)
     name: str = Field(default="", max_length=120)
+    street_address: str = Field(default="", max_length=160)
     city: str = Field(default="", max_length=80)
     state: str = Field(default="", max_length=2)
+    zip_code: str = Field(default="", max_length=10)
     taxonomy: str = Field(default="", max_length=120)
     license: str = Field(default="", max_length=80)
 
@@ -456,14 +459,16 @@ def verify_provider(body: VerificationInput):
     if not npi_valid(body.npi):
         raise HTTPException(400, "Enter a valid 10-digit NPI")
     p = lookup_nppes(body.npi)
-    fields = [("Name", body.name, p["name"]), ("City", body.city, p["city"]),
-              ("State", body.state, p["state"]), ("Taxonomy", body.taxonomy, p["taxonomy"]),
+    fields = [("Name", body.name, p["name"]), ("Street address", body.street_address, p.get("street_address")),
+              ("City", body.city, p["city"]), ("State", body.state, p["state"]),
+              ("ZIP", body.zip_code, p.get("postal_code")), ("Taxonomy", body.taxonomy, p["taxonomy"]),
               ("License", body.license, None)]
     return {"npi": body.npi, "source": "Live NPPES Registry", "last_updated": p["last_updated"],
+            "retrieved_at": p.get("retrieved_at"),
             "source_url": p["source_url"], "fields": [{"field": label, "entered": entered,
-            "official": official, "result": field_result(entered, official)}
+            "official": official, "result": compared_field(label, entered, official)}
             for label, entered, official in fields],
-            "note": "Comparison uses a live NPPES lookup. A match does not establish licensing or credentialing. License verification is not connected. Values entered are not saved."}
+            "note": "Comparison uses a live NPPES lookup. A close match only normalizes a street suffix or five-digit ZIP against ZIP+4. A match does not establish licensing or credentialing. License verification is not connected. Values entered are not saved."}
 
 
 class RosterInput(BaseModel):
@@ -490,6 +495,59 @@ def check_roster(body: RosterInput):
         results.append({"npi": npi, "name": p["display_name"], "label": assessment["label"],
                         "reason": assessment["sentence"]})
     return {"results": results, "saved": False, "note": "One-time synthetic pilot check. No roster is stored or monitored."}
+
+
+def _directory_owner(request: Request) -> str:
+    actor = getattr(request.state, "actor", None)
+    if os.environ.get("K_SERVICE") and not actor:
+        raise HTTPException(403, "verified sign-in required")
+    return owner_key(actor or "local_demo")
+
+
+def directory_as_of() -> str:
+    cur = db()
+    rid = current_run(cur)
+    return str(one(cur, "SELECT as_of FROM runs WHERE run_id = ?", [rid])["as_of"])
+
+
+@app.get("/api/directory")
+def get_directory(request: Request):
+    document = directory_store().get(_directory_owner(request))
+    return document or {"saved": False, "note": "No saved synthetic directory. Scheduled checks and notifications are not enabled."}
+
+
+@app.post("/api/directory")
+def save_directory(request: Request, body: RosterInput):
+    result = check_roster(body)
+    owner = _directory_owner(request)
+    prior = directory_store().get(owner)
+    document = {"saved": True, "npis": body.npis, "results": result["results"],
+                "as_of": directory_as_of(), "last_checked_at": utcnow(),
+                "changes": [], "note": "Saved synthetic directory. Recheck manually; scheduled checks and notifications are not enabled."}
+    directory_store().put(owner, document, "replace" if prior else "create")
+    return document
+
+
+@app.post("/api/directory/recheck")
+def recheck_directory(request: Request):
+    owner = _directory_owner(request)
+    previous = directory_store().get(owner)
+    if not previous:
+        raise HTTPException(404, "No saved directory")
+    result = check_roster(RosterInput(npis=previous["npis"]))
+    before = {r["npi"]: r for r in previous["results"]}
+    changes = [{"npi": r["npi"], "before": before[r["npi"]]["label"], "after": r["label"]}
+               for r in result["results"] if r["label"] != before[r["npi"]]["label"]]
+    document = {**previous, "results": result["results"], "as_of": directory_as_of(),
+                "last_checked_at": utcnow(), "changes": changes}
+    directory_store().put(owner, document, "recheck")
+    return document
+
+
+@app.delete("/api/directory")
+def delete_directory(request: Request):
+    directory_store().delete(_directory_owner(request))
+    return {"saved": False}
 
 
 @app.get("/api/government/leads")

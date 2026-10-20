@@ -5,7 +5,7 @@ import pytest
 from fastapi import HTTPException
 
 from npi_integrity import api
-from npi_integrity.ux import field_result, npi_valid, provider_assessment
+from npi_integrity.ux import compared_field, field_result, npi_valid, provider_assessment
 from npi_integrity.engine import explain_score
 
 
@@ -17,6 +17,10 @@ def test_npi_checksum_and_comparison_states():
     assert field_result("Austin", "Dallas") == "Differs"
     assert field_result("TX123", None) == "Cannot check yet"
     assert field_result("", "Dallas") == "Not supplied"
+    assert compared_field("ZIP", "78701", "78701-1234") == "Close match"
+    assert compared_field("Street address", "100 Main Street", "100 MAIN ST") == "Close match"
+    assert compared_field("Name", "Jane Smyth", "Jane Smith") == "Differs"
+    assert compared_field("Street address", "101 Main St", "100 Main St") == "Differs"
 
 
 def test_no_signal_does_not_become_unqualified_clear():
@@ -35,10 +39,26 @@ def test_verify_license_is_explicitly_unavailable(monkeypatch):
     body = api.VerificationInput(npi="1234567893", name="JANE SMITH", city="Dallas", license="TX123")
     result = api.verify_provider(body)
     outcomes = {field["field"]: field["result"] for field in result["fields"]}
-    assert outcomes == {"Name": "Match", "City": "Differs", "State": "Not supplied",
+    assert outcomes == {"Name": "Match", "Street address": "Not supplied", "City": "Differs", "State": "Not supplied",
+                        "ZIP": "Not supplied",
                         "Taxonomy": "Not supplied", "License": "Cannot check yet"}
     assert "saved" in result["note"]
     assert result["source"] == "Live NPPES Registry"
+
+
+def test_verify_address_zip_and_name_are_conservative(monkeypatch):
+    monkeypatch.setattr(api, "lookup_nppes", lambda *_: {"npi": "1234567893", "name": "Jane Smith",
+        "street_address": "100 MAIN STREET", "city": "Austin", "state": "TX", "postal_code": "78701-1234",
+        "taxonomy": "Family Medicine", "last_updated": "2026-10-01", "retrieved_at": "2026-10-20T00:00:00Z",
+        "source_url": "https://npiregistry.cms.hhs.gov/provider-view/1234567893"})
+    body = api.VerificationInput(npi="1234567893", name="Jane Smyth", street_address="100 Main St", zip_code="78701")
+    result = api.verify_provider(body)
+    outcomes = {field["field"]: field["result"] for field in result["fields"]}
+    assert outcomes["Name"] == "Differs"
+    assert outcomes["Street address"] == "Close match"
+    assert outcomes["ZIP"] == "Close match"
+    assert outcomes["License"] == "Not supplied"
+    assert result["retrieved_at"] == "2026-10-20T00:00:00Z"
 
 
 def test_roster_rejects_invalid_or_duplicate_npis(monkeypatch):
