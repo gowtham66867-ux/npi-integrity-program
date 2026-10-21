@@ -83,19 +83,22 @@ async function loadSummary() {
 /* ---------------------------------------------------------------- router */
 const routes = { home: viewHome, live: viewLiveNppes, verify: viewVerify, roster: viewRoster, leads: viewLeads, methodology: viewMethodology,
   queue: viewQueue, watch: viewWatch, alert: viewAlert, provider: viewProvider, scorecard: viewScorecard, rules: viewRules, sources: viewSources, audit: viewAudit };
+let routeId = 0;
 async function route() {
+  const currentRoute = ++routeId;
   const [, requested, arg] = location.hash.split("/");
   app.innerHTML = `<p class="muted pad">Loading…</p>`;
   try {
     if (!SUMMARY) await loadSummary();
+    if (currentRoute !== routeId) return;
     const view = requested || (MODE === "clinic" ? "home" : "leads");
     if ((view === "leads" || view === "watch") && !SESSION.modes.includes("government")) throw new Error("This view is not enabled for your account.");
     document.querySelectorAll("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.v === view));
-    await (routes[view] || viewHome)(arg && decodeURIComponent(arg));
+    await (routes[view] || viewHome)(arg && decodeURIComponent(arg), currentRoute);
   } catch (e) {
-    app.innerHTML = `<div class="card"><h2>Something went wrong</h2><p>${esc(e.message)}</p></div>`;
+    if (currentRoute === routeId) app.innerHTML = `<div class="card"><h2>Something went wrong</h2><p>${esc(e.message)}</p></div>`;
   }
-  window.scrollTo(0, 0);
+  if (currentRoute === routeId) window.scrollTo(0, 0);
 }
 window.addEventListener("hashchange", route);
 async function runSearch(q) {
@@ -111,8 +114,9 @@ $("#search").addEventListener("submit", async (e) => {
   try { await runSearch($("#q").value.trim()); } catch (err) { toast(err.message); }
 });
 
-async function viewHome() {
+async function viewHome(_arg, currentRoute) {
   const items = await api("/api/alerts");
+  if (currentRoute !== routeId) return;
   const first = items.find((a) => OPEN.has(a.status));
   app.innerHTML = `<section class="hero card"><div class="eyebrow">Clinic / Facility</div><h1>What would you like to check?</h1>
     <p class="muted">Enter an exact NPI to check the live CMS record. The alert demo and claims remain synthetic.</p>
@@ -130,7 +134,7 @@ async function viewHome() {
   $("#focus-search").addEventListener("click", (e) => { e.preventDefault(); $("#home-q").focus(); });
 }
 
-async function viewLiveNppes(npi) {
+async function viewLiveNppes(npi, currentRoute) {
   if (!npi) {
     app.innerHTML = `<h1>Public provider check</h1><p class="muted">Check one live NPPES profile and a dated OIG exclusion snapshot by exact 10-digit NPI. This does not run synthetic alerts or verify licensing, enrollment, or claims.</p>
       <form id="live-search" class="card hero-search"><label for="live-npi">10-digit NPI</label><div><input id="live-npi" required inputmode="numeric" pattern="[0-9]{10}" maxlength="10" autocomplete="off"><button class="b primary">Look up NPI</button></div></form>`;
@@ -141,6 +145,7 @@ async function viewLiveNppes(npi) {
     api(`/api/nppes/${encodeURIComponent(npi)}`),
     api(`/api/public-integrity/${encodeURIComponent(npi)}`),
   ]);
+  if (currentRoute !== routeId) return;
   const p = profileResponse.status === "fulfilled" ? profileResponse.value : null;
   const profileCard = p ? `<div class="card alerthead"><div>
       <div class="eyebrow">LIVE CMS NPPES REGISTRY · retrieved ${esc(p.retrieved_at.slice(0, 16).replace("T", " "))} UTC</div>
@@ -175,7 +180,7 @@ async function viewLiveNppes(npi) {
   }
 }
 
-async function viewVerify() {
+async function viewVerify(_arg, currentRoute) {
   app.innerHTML = `<h1>Verify our information</h1><p class="muted">Compare your fields with a live CMS NPPES lookup for one exact NPI. Values entered are not saved; do not enter patient data.</p>
     <form id="verify-form" class="card field-form"><label>NPI <input name="npi" inputmode="numeric" pattern="[0-9]{10}" maxlength="10" required></label>
       <label>Name <input name="name" maxlength="120"></label><label>Street address <input name="street_address" maxlength="160"></label>
@@ -184,37 +189,43 @@ async function viewVerify() {
       <label>License number <input name="license" maxlength="80" aria-describedby="license-note"></label>
       <p id="license-note" class="small muted">License source is not connected; this field will say “Cannot check yet.”</p>
       <button class="b primary">Compare with source</button></form><div id="verify-results" aria-live="polite"></div>`;
+  const resultBox = $("#verify-results");
   $("#verify-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const body = Object.fromEntries(new FormData(e.target).entries());
     try {
       const result = await api("/api/verify", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
-      $("#verify-results").innerHTML = `<div class="card result-card print-area"><h2>Comparison for NPI ${esc(result.npi)}</h2><p class="small muted">${esc(result.source)} · record updated ${mdy(result.last_updated)} · retrieved ${esc(result.retrieved_at || "time unavailable")}. ${esc(result.note)} <a href="${esc(result.source_url)}" target="_blank" rel="noopener noreferrer">Open CMS record ↗</a></p>
+      if (currentRoute !== routeId) return;
+      resultBox.innerHTML = `<div class="card result-card print-area"><h2>Comparison for NPI ${esc(result.npi)}</h2><p class="small muted">${esc(result.source)} · record updated ${mdy(result.last_updated)} · retrieved ${esc(result.retrieved_at || "time unavailable")}. ${esc(result.note)} <a href="${esc(result.source_url)}" target="_blank" rel="noopener noreferrer">Open CMS record ↗</a></p>
         <button class="b print-action" type="button" onclick="window.print()">Print / save PDF</button>
         <div class="tablewrap"><table class="t"><thead><tr><th>Field</th><th>You entered</th><th>Source record</th><th>Result</th></tr></thead><tbody>${result.fields.map((f) => `<tr><td>${esc(f.field)}</td><td>${esc(f.entered || "—")}</td><td>${esc(f.official || "Unavailable")}</td><td><strong>${esc(f.result)}</strong></td></tr>`).join("")}</tbody></table></div></div>`;
-    } catch (err) { $("#verify-results").innerHTML = `<div class="banner" role="alert">${esc(err.message)}</div>`; }
+    } catch (err) { if (currentRoute === routeId) resultBox.innerHTML = `<div class="banner" role="alert">${esc(err.message)}</div>`; }
   });
 }
 
-async function viewRoster() {
+async function viewRoster(_arg, currentRoute) {
   app.innerHTML = `<h1>My synthetic directory</h1><div class="banner">Save only pilot NPIs. Rechecks are manual; scheduled checks and notifications are not enabled. Upload a CSV with exactly one column named <b>npi</b>; do not include patient or clinic data.</div>
     <form id="roster-form" class="card"><label for="roster-file">Synthetic NPI directory CSV (up to 100 rows)</label><input id="roster-file" type="file" accept=".csv,text/csv" required><button class="b primary">Save and check directory</button></form>
     <div id="roster-results" aria-live="polite"></div>`;
+  const resultBox = $("#roster-results");
+  const rosterForm = $("#roster-form");
   const renderDirectory = (result) => {
-    if (!result.saved) { $("#roster-results").innerHTML = `<p class="muted">No saved directory yet.</p>`; return; }
+    if (currentRoute !== routeId) return;
+    if (!result.saved) { resultBox.innerHTML = `<p class="muted">No saved directory yet.</p>`; return; }
     const counts = result.results.reduce((out, row) => { out[row.label] = (out[row.label] || 0) + 1; return out; }, {});
-    $("#roster-results").innerHTML = `<div class="card result-card print-area"><h2>Saved directory results</h2>
+    resultBox.innerHTML = `<div class="card result-card print-area"><h2>Saved directory results</h2>
       <p>${Object.entries(counts).map(([label, n]) => `${esc(label)}: ${n}`).join(" · ")}</p>
       <p class="small muted">Pilot inputs as of ${mdy(result.as_of)} · checked ${esc(result.last_checked_at)}. ${esc(result.note)}</p>
       <p>${(result.changes || []).length ? `${result.changes.length} changed result(s) since the previous check.` : "No result-status changes since the previous check."}</p>
       <div class="print-action"><button class="b" id="directory-recheck">Recheck now</button> <button class="b" onclick="window.print()">Print / save attestation</button> <button class="b danger" id="directory-delete">Delete directory</button></div>
       <div class="tablewrap"><table class="t"><thead><tr><th>NPI</th><th>Provider</th><th>Result</th><th>Why</th></tr></thead><tbody>${result.results.map((row) => `<tr><td><a href="#/provider/${esc(row.npi)}">${esc(row.npi)}</a></td><td>${esc(row.name)}</td><td>${esc(row.label)}</td><td>${esc(row.reason)}</td></tr>`).join("")}</tbody></table></div>
       <p class="small muted">Attestation of a completed synthetic pilot check only. This is not credential or exclusion clearance.</p></div>`;
-    $("#directory-recheck").onclick = async () => { try { renderDirectory(await api("/api/directory/recheck", {method:"POST"})); } catch (e) { toast(e.message); } };
-    $("#directory-delete").onclick = async () => { if (!confirm("Delete your saved synthetic directory?")) return; try { await api("/api/directory", {method:"DELETE"}); renderDirectory({saved:false}); } catch (e) { toast(e.message); } };
+    $("#directory-recheck", resultBox).onclick = async () => { try { renderDirectory(await api("/api/directory/recheck", {method:"POST"})); } catch (e) { if (currentRoute === routeId) toast(e.message); } };
+    $("#directory-delete", resultBox).onclick = async () => { if (!confirm("Delete your saved synthetic directory?")) return; try { await api("/api/directory", {method:"DELETE"}); renderDirectory({saved:false}); } catch (e) { if (currentRoute === routeId) toast(e.message); } };
   };
-  try { renderDirectory(await api("/api/directory")); } catch (e) { $("#roster-results").innerHTML = `<div class="banner" role="alert">${esc(e.message)}</div>`; }
-  $("#roster-form").addEventListener("submit", async (e) => {
+  try { renderDirectory(await api("/api/directory")); } catch (e) { if (currentRoute === routeId) resultBox.innerHTML = `<div class="banner" role="alert">${esc(e.message)}</div>`; }
+  if (currentRoute !== routeId) return;
+  rosterForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     try {
       const file = $("#roster-file").files[0];
@@ -224,13 +235,15 @@ async function viewRoster() {
         throw new Error("Use exactly one npi column with 1–100 ten-digit rows.");
       const result = await api("/api/directory", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({npis:lines.map((line) => line.trim())})});
       renderDirectory(result);
-    } catch (err) { $("#roster-results").innerHTML = `<div class="banner" role="alert">${esc(err.message)}</div>`; }
+    } catch (err) { if (currentRoute === routeId) resultBox.innerHTML = `<div class="banner" role="alert">${esc(err.message)}</div>`; }
   });
 }
 
-async function viewLeads() {
+async function viewLeads(_arg, currentRoute) {
   const items = await api("/api/government/leads");
-  app.innerHTML = `<div class="eyebrow">Government · synthetic pilot</div><h1>Review workbench</h1><p class="muted">Work through potential anomalies, verify cited evidence, then record a disposition. Scores prioritize review; they are not fraud probabilities.</p>
+  if (currentRoute !== routeId) return;
+  const view = document.createElement("div");
+  view.innerHTML = `<div class="eyebrow">Government · synthetic pilot</div><h1>Review workbench</h1><p class="muted">Work through potential anomalies, verify cited evidence, then record a disposition. Scores prioritize review; they are not fraud probabilities.</p>
     <div class="kpis"><div class="kpi"><div class="v">${fmtN(items.filter((a) => OPEN.has(a.status)).length)}</div><div class="l">Open leads</div></div>
       <div class="kpi"><div class="v">${fmtN(items.filter((a) => a.status === "New").length)}</div><div class="l">Awaiting first review</div></div>
       <div class="kpi"><div class="v">${fmtN(items.filter((a) => a.status === "In review").length)}</div><div class="l">Evidence review underway</div></div>
@@ -243,21 +256,26 @@ async function viewLeads() {
       <label for="lead-status">Status</label><select id="lead-status"><option value="Open">Open</option><option value="">All statuses</option>${[...new Set(items.map((a) => a.status))].sort().map((s) => `<option>${esc(s)}</option>`).join("")}</select></div>
     <div class="tablewrap"><table class="t"><thead><tr><th>Score</th><th>Provider</th><th>State</th><th>Top reason</th><th>Review stage</th><th>Next step</th></tr></thead><tbody id="lead-body"></tbody></table></div>
     <div class="pager"><span id="lead-count" class="small muted"></span><button class="b" id="lead-prev">Previous</button><button class="b" id="lead-next">Next</button></div></section>`;
+  app.replaceChildren(view);
+  const leadQuery = $("#lead-query", view), leadState = $("#lead-state", view), leadStatus = $("#lead-status", view);
+  const leadBody = $("#lead-body", view), leadCount = $("#lead-count", view);
+  const leadPrev = $("#lead-prev", view), leadNext = $("#lead-next", view);
   let page = 0;
   const render = () => {
-    const query = $("#lead-query").value.trim().toLowerCase();
-    const filtered = items.filter((a) => (!$("#lead-state").value || a.state === $("#lead-state").value) &&
-      (!$("#lead-status").value || ($("#lead-status").value === "Open" ? OPEN.has(a.status) : a.status === $("#lead-status").value)) &&
+    if (currentRoute !== routeId) return;
+    const query = leadQuery.value.trim().toLowerCase();
+    const filtered = items.filter((a) => (!leadState.value || a.state === leadState.value) &&
+      (!leadStatus.value || (leadStatus.value === "Open" ? OPEN.has(a.status) : a.status === leadStatus.value)) &&
       (!query || [a.display_name, a.npi, a.top_reason].some((value) => String(value || "").toLowerCase().includes(query))));
     page = Math.min(page, Math.max(0, Math.ceil(filtered.length / 10) - 1));
-    $("#lead-body").innerHTML = filtered.slice(page * 10, page * 10 + 10)
+    leadBody.innerHTML = filtered.slice(page * 10, page * 10 + 10)
       .map((a) => `<tr class="click" data-href="#/alert/${esc(a.alert_id)}" tabindex="0" role="link" aria-label="Open lead for ${esc(a.display_name || a.npi)}"><td>${scoreBadge(a.score,a.tier)}</td><td><b>${esc(a.display_name || a.npi)}</b><div class="small muted">${esc(a.npi)}</div></td><td>${esc(a.state)}</td><td>${esc(a.top_reason)}</td><td>${statusTag(a.status)}</td><td><a href="#/alert/${esc(a.alert_id)}">${esc(nextReviewStep(a))} →</a></td></tr>`).join("") || `<tr><td colspan="6">No leads match these filters.</td></tr>`;
-    $("#lead-count").textContent = filtered.length ? `${page * 10 + 1}–${Math.min(page * 10 + 10, filtered.length)} of ${filtered.length}` : "0 leads";
-    $("#lead-prev").disabled = page === 0; $("#lead-next").disabled = (page + 1) * 10 >= filtered.length;
+    leadCount.textContent = filtered.length ? `${page * 10 + 1}–${Math.min(page * 10 + 10, filtered.length)} of ${filtered.length}` : "0 leads";
+    leadPrev.disabled = page === 0; leadNext.disabled = (page + 1) * 10 >= filtered.length;
   };
-  $("#lead-query").addEventListener("input", () => { page = 0; render(); });
-  $("#lead-state").addEventListener("change", () => { page = 0; render(); }); $("#lead-status").addEventListener("change", () => { page = 0; render(); });
-  $("#lead-prev").addEventListener("click", () => { page--; render(); }); $("#lead-next").addEventListener("click", () => { page++; render(); }); render();
+  leadQuery.addEventListener("input", () => { page = 0; render(); });
+  leadState.addEventListener("change", () => { page = 0; render(); }); leadStatus.addEventListener("change", () => { page = 0; render(); });
+  leadPrev.addEventListener("click", () => { page--; render(); }); leadNext.addEventListener("click", () => { page++; render(); }); render();
 }
 
 async function viewMethodology() {
@@ -268,8 +286,9 @@ async function viewMethodology() {
 
 /* ---------------------------------------------------------------- queue */
 let QUEUE_FILTER = { tier: "All", status: "Open" };
-async function viewQueue() {
+async function viewQueue(_arg, currentRoute) {
   const items = await api("/api/alerts");
+  if (currentRoute !== routeId) return;
   const sc = SUMMARY.scorecard, t = SUMMARY.tiers;
   const open = items.filter((a) => OPEN.has(a.status)).length;
   const featured = items.find((a) => a.tier === "Critical");
@@ -334,8 +353,9 @@ async function viewQueue() {
   render();
 }
 
-async function viewWatch() {
+async function viewWatch(_arg, currentRoute) {
   const items = await api("/api/watchlist");
+  if (currentRoute !== routeId) return;
   app.innerHTML = `<h1>Watch list</h1><p class="muted">Scored but below the alert threshold (550). Re-scored every run; no reviewer action needed. Weak or low-confidence signals land here by design.</p>
     <div class="tablewrap"><table class="t"><tr><th>Score</th><th>Provider</th><th>Signals</th><th>Top reason</th></tr>
     ${items.map((s) => `<tr class="click" data-href="#/provider/${s.npi}"><td>${scoreBadge(s.score, s.tier)}</td>
@@ -469,8 +489,9 @@ async function drawGraph(npi, el) {
 }
 const graphLegend = `<div class="legend"><span><i style="background:#1f6fb2"></i>provider</span><span><i style="background:#e8590c"></i>alerted provider</span><span><i style="background:#b7791f"></i>address</span><span><i style="background:#6741d9"></i>person (official)</span><span><i style="background:#c92a2a"></i>exclusion</span><span>squares = organizations</span></div>`;
 
-async function viewAlert(id) {
+async function viewAlert(id, currentRoute = routeId) {
   const d = await api(`/api/alerts/${id}`);
+  if (currentRoute !== routeId) return;
   const a = d.alert, p = d.provider;
   const assessment = p.status === "Deactivated" ? "Needs attention" : a.tier === "Critical" || a.tier === "High" ? "Needs attention" : "To review";
   const canWrite = ["reviewer", "supervisor", "local_demo"].includes(SESSION.role);
@@ -531,7 +552,7 @@ async function viewAlert(id) {
     if (tab.dataset.caseTab === "2") drawGraph(a.npi, $("#graph"));
   }));
   $("#primary-evidence")?.addEventListener("click", () => document.querySelector('[data-case-tab="3"]').click());
-  loadAgent(a.alert_id);
+  loadAgent(a.alert_id, currentRoute);
   document.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => actionModal(a, b.dataset.act)));
   $("#rerun").addEventListener("click", async (e) => {
     e.target.disabled = true; e.target.textContent = "Re-running from archived inputs…";
@@ -568,13 +589,15 @@ function actionModal(a, act) {
       try { localStorage.setItem("npi.reviewer", body.actor); } catch {}
       $("#reviewer").value = body.actor;
       const r = await api(`/api/alerts/${a.alert_id}/disposition`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      m.classList.add("hidden"); toast(`${a.alert_id} → ${r.status}`); viewAlert(a.alert_id);
+      m.classList.add("hidden"); toast(`${a.alert_id} → ${r.status}`);
+      if (location.hash === `#/alert/${a.alert_id}`) route();
     } catch (e) { toast(e.message); }
   };
 }
 
-async function viewProvider(npi) {
+async function viewProvider(npi, currentRoute) {
   const d = await api(`/api/providers/${npi}`);
+  if (currentRoute !== routeId) return;
   const p = d.provider;
   app.innerHTML = `<p class="small"><a href="#" data-back="1">← Back</a></p>
     <div class="card alerthead"><div><div class="small muted">Synthetic demo provider check · source snapshot ${mdy(d.as_of)}</div><h1>${esc(p.display_name || npi)}</h1>
@@ -601,8 +624,9 @@ async function viewProvider(npi) {
 }
 
 /* ---------------------------------------------------------------- scorecard, rules, sources, audit */
-async function viewScorecard() {
+async function viewScorecard(_arg, currentRoute) {
   const s = await api("/api/scorecard");
+  if (currentRoute !== routeId) return;
   const sweep = s.sweep || [];
   const W = 760, H = 150, L = 30;
   const xs = (i) => L + (i * (W - L - 20)) / Math.max(sweep.length - 1, 1);
@@ -634,8 +658,9 @@ async function viewScorecard() {
         <p class="small muted">Hits below the alert threshold (e.g. V-02 peer outliers) stay on the watch list by design.</p></div></div></div>`;
 }
 
-async function viewRules() {
+async function viewRules(_arg, currentRoute) {
   const { rules, scoring } = await api("/api/rules");
+  if (currentRoute !== routeId) return;
   const meanings = {Low:"No alert under the current synthetic rules; checked coverage still matters.", Watch:"A weaker signal to revisit as new data arrives.", Elevated:"Meets the current alert setting; review the evidence.", High:"Stronger combined signals; prioritize human review.", Critical:"At least 900 points, often from a hard-evidence rule; verify before acting."};
   const bandRows = scoring.tiers.map((t, i) => `<tr><td>${esc(t.name)}</td><td>${fmtN(t.min)}–${fmtN((scoring.tiers[i + 1]?.min ?? 1001) - 1)}</td><td>${esc(meanings[t.name] || "Human review required")}</td></tr>`).join("");
   app.innerHTML = `<h1>Score bands and rule catalog</h1><p class="muted">Draft definitions for NeXari review. This pilot currently has ${rules.length} implemented rules. A score orders synthetic signals for review; it does not measure the probability of wrongdoing.</p>
@@ -655,8 +680,9 @@ async function viewRules() {
       <dt>Tiers</dt><dd>${scoring.tiers.map((t) => `${t.name} ≥ ${t.min}`).join(" · ")} · alert at ≥ ${scoring.alert_threshold}</dd></dl></div>`;
 }
 
-async function viewSources() {
+async function viewSources(_arg, currentRoute) {
   const d = await api("/api/sources");
+  if (currentRoute !== routeId) return;
   const byKey = Object.fromEntries(d.sources.map((s) => [s.key, s]));
   app.innerHTML = `<h1>Sources and lineage</h1><p class="muted">Files land write-once in the raw zone, stamped with SHA-256 and version date. Every evidence citation points back to a file, version, and row here.</p>
     <div class="tablewrap"><table class="t"><tr><th>Source</th><th>Version</th><th>File</th><th>Rows</th><th>Checks</th><th>SHA-256</th><th>Origin</th></tr>
@@ -665,8 +691,9 @@ async function viewSources() {
       <td class="mono small">${esc(l.sha256.slice(0, 16))}…</td><td class="small">${esc(byKey[l.source]?.origin || "")}</td></tr>`).join("")}</table></div>`;
 }
 
-async function viewAudit() {
+async function viewAudit(_arg, currentRoute) {
   const rows = await api("/api/audit");
+  if (currentRoute !== routeId) return;
   app.innerHTML = `<h1>Audit log</h1><p class="muted">Append-only: runs, re-runs, dispositions, and package exports. The API exposes no update or delete.</p>
     <div class="tablewrap"><table class="t"><tr><th>#</th><th>When (UTC)</th><th>Actor</th><th>Action</th><th>Object</th><th>Details</th></tr>
     ${rows.map((r) => `<tr><td>${r.seq}</td><td class="small">${esc(String(r.ts).slice(0, 19).replace("T", " "))}</td><td>${esc(r.actor)}</td><td><span class="chip">${esc(r.action)}</span></td><td class="mono small">${esc(r.object)}</td><td class="mono small" style="max-width:520px;word-break:break-all">${esc(r.details)}</td></tr>`).join("")}</table></div>`;
@@ -704,13 +731,15 @@ function agentCard(r) {
       <pre class="small mono" style="white-space:pre-wrap">${esc(JSON.stringify(r.trace, null, 1))}</pre></details>
     <p class="small muted">Draft only. Agents cannot change an alert's status; a reviewer decides and signs.</p>`;
 }
-async function loadAgent(alertId) {
+async function loadAgent(alertId, currentRoute) {
   const box = $("#agent");
-  if (!box) return;
-  try { box.innerHTML = agentCard(await api(`/api/alerts/${alertId}/draft`)); } catch (e) { box.innerHTML = agentCard(null); }
-  $("#agentrun").onclick = async (ev) => {
+  const runButton = $("#agentrun");
+  if (!box || !runButton) return;
+  try { const draft = await api(`/api/alerts/${alertId}/draft`); if (currentRoute !== routeId) return; box.innerHTML = agentCard(draft); }
+  catch (e) { if (currentRoute !== routeId) return; box.innerHTML = agentCard(null); }
+  runButton.onclick = async (ev) => {
     ev.target.disabled = true; ev.target.textContent = "Agents working…";
-    try { box.innerHTML = agentCard(await api(`/api/alerts/${alertId}/draft?actor=${encodeURIComponent(reviewer() || "reviewer")}`, { method: "POST" })); }
+    try { const draft = await api(`/api/alerts/${alertId}/draft?actor=${encodeURIComponent(reviewer() || "reviewer")}`, { method: "POST" }); if (currentRoute === routeId) box.innerHTML = agentCard(draft); }
     catch (e) { toast(e.message); }
     ev.target.disabled = false; ev.target.textContent = "Run agents";
   };
