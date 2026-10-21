@@ -4,11 +4,11 @@ The private console is deployed at [npi-console](https://npi-console-10566432634
 
 ## Required billing evidence
 
-The user approved billing account `01E4B3-EA09E1-258E11` with primary card ending **8192**. Google Cloud labels its organization `wanologicalsolution.com` (number `267783416603`); this is the actual project parent and billing-account organization, even though the project and service are named for TexMed. Inspect **Payment method** for this exact account before every deployment and record only the last four digits of every active method, including backup methods. Card **6022** is forbidden by the policy validator. Never store a full card number.
+The project is under the `texmed.pro` organization (`878199198137`) and is linked to TexMed Cloud Billing account `01B53D-1B9A75-6E585F`. The October 19 user instruction authorizes using whichever payment method is associated with this TexMed account. The deployment guard checks the live billing link and organization; it does not pin or record card digits. Never store a full card number.
 
-[billing_policy.json](billing_policy.json) records the approved project, account, organization number, primary card last four, active method last fours, inspection timestamp in UTC, and inspector identity. Set `payment_verification_source` to `google_cloud_payment_methods_console`. The attestation expires after 24 hours; refresh it after any payment-method change or before a later deployment.
+[billing_policy.json](billing_policy.json) records the approved deployment identity, project, billing account, organization, and region.
 
-The preflight queries the live project billing link, account status and organization, project parent, and a monthly USD 25 budget with alerts scoped to this project. A budget alert does not cap spending. Cloud Billing's API does **not** expose card digits. The payment console inspection is a human attestation; the code cannot independently prove which card Google will charge at billing time. Do not set an approval from an account name alone.
+The preflight queries the live project billing link, account status and organization, complete project ancestry, and a monthly USD 25 budget with alerts scoped to this project. A budget alert does not cap spending. Cloud Billing's API does **not** expose card digits; the account owner manages its payment method.
 
 ```bash
 .venv/bin/python deploy/preflight.py --policy-only
@@ -18,7 +18,7 @@ The preflight queries the live project billing link, account status and organiza
 ./deploy/deploy_gcp.sh
 ```
 
-`--dry-run` performs the billing preflight without cloud changes. A normal run repeats the preflight after the release checks and before enabling services or creating resources. There are no environment overrides for the forbidden card or approved account. The script uses the pinned identity and project on every `gcloud` command.
+`--dry-run` performs the billing preflight without cloud changes. A normal run repeats the preflight after the release checks and before enabling services or creating resources. The script uses the pinned identity and project on every `gcloud` command.
 
 ## Runtime
 
@@ -28,6 +28,67 @@ The Cloud Run service is private. On October 7, signed-in browser access with `g
 
 The release harness passed 141 tests and 16/16 offline evaluation gates on October 7. The synthetic scorecard does not estimate real-world accuracy. Separate live-data validation, rule calibration, and live-model evaluation are required before a production accuracy claim.
 
+On October 13, the task-focused console update passed 159 tests and the offline evaluation gates. Billing preflight confirmed project `texmed-npi-integrity`, account `01E4B3-EA09E1-258E11`, and the current 8192 payment attestation with 6022 blocked. Cloud Build `c1c1ffc1-632a-4cbf-b53a-1d5184d860dd` produced image digest `sha256:4772cc77f4d99aa636750e0c6eb1bf871c16ba2b495467a0e0e880a3f917ad6c`. A temporary local DNS failure interrupted polling after the build succeeded, so that exact image was deployed by digest. Revision `npi-console-00006-dgf` serves 100% of traffic with IAP enabled and synthetic mode retained. Signed-in browser smoke checks rendered Home, the case workspace, field comparison (including “Cannot check yet” for license), and Government leads. An unauthenticated request to `/` was redirected to Google sign-in. The one-time roster check has not been exercised with an uploaded CSV in the live service; it remains restricted to synthetic input and does not persist or monitor rosters.
+
 ## PHI boundary
 
 The current deployment is a synthetic pilot and must not receive PHI. It pins `NPI_DATA_MODE=synthetic`, rejects free-text review reasons, and has no external model credentials. Data Access audit logs for Firestore, IAP, and Cloud Run and Firestore point-in-time recovery are enabled by [harden_gcp.sh](harden_gcp.sh), which the deployment script reruns on each release. See [HIPAA_READINESS.md](HIPAA_READINESS.md) for verified controls and requirements before any PHI use; these settings alone do not establish HIPAA compliance.
+
+The optional exact-NPI lookup and verification form call the public NPPES API
+v2.1 server-side. They return a single public Registry record without storing
+the response or joining it to synthetic scores. Bulk monitoring still requires
+an independently validated monthly/weekly/deactivation ingestion pipeline.
+On October 13, revision `npi-console-00007-gws` passed 176 tests and the offline
+evaluation gates and serves 100% of traffic with IAP enabled and
+`NPI_DATA_MODE=synthetic`. A signed-in browser check retrieved NPI 1447268255
+from CMS through Cloud Run and confirmed the live comparison showed a matching
+name and differing city. The existing synthetic alert demo remained labeled.
+
+The October 13 public-data release adds a minimal exact-NPI index of the
+HHS-OIG LEIE active-exclusion download to the provider page. The OIG source
+reported an update on 2026-10-09; the index was downloaded on 2026-10-13 from
+84,093 rows, of which 8,924 published a 10-digit NPI. The source CSV SHA-256
+is `7483d47bc48734f7955095d51d13dd1111b11cc8a60f54ebe894806e6c293c03`.
+The index excludes DOB and street address and never treats an absent exact-NPI
+match as exclusion clearance. A published match requires verification in the
+official OIG search. Its source-update date, download date, coverage, and hash
+are visible in the UI. This snapshot is not a real-time fraud feed.
+
+Revision `npi-console-00009-d2x` serves 100% of traffic from image digest
+`sha256:4d899cb895d29b5ff8036a147a6a379b6c9568b6f8a6b8f0890ba5616a789777`.
+The release harness passed 184 tests and 16/16 offline evaluation gates.
+Deployment preflight confirmed the approved project, account, recent 8192
+payment-method attestation, and 6022 block. Cloud Run still has IAP enabled and
+`NPI_DATA_MODE=synthetic`; an unauthenticated request redirected to Google
+sign-in. Signed-in browser checks showed both an absent exact-NPI match and a
+published LEIE NPI match, and confirmed the narrow-screen layout after a
+checksum overflow fix. Firestore case persistence was not retested on this
+revision; the case storage backend and database configuration were unchanged.
+See [public-data acceptance cases](../tests/PUBLIC_DATA_TEST_CASES.md) for
+remaining source-specific and browser checks.
+
+On October 19, the project was confirmed under `texmed.pro` and linked to
+TexMed billing account `01B53D-1B9A75-6E585F`. A USD 25 monthly alert budget
+was created for project `1056643263413` with 50%, 90%, and 100% thresholds.
+The user approved billing through whichever method is associated with this
+TexMed account, and the deployment policy now verifies the account rather than
+card digits. The release passed 180 tests and 16/16 offline evaluation gates.
+Revision `npi-console-00010-q2r` serves 100% of traffic from image digest
+`sha256:a8e1c7fb5c76b34b9730bd8f7970c03a907263380c92330625de3cfedd2d1bca`.
+IAP and synthetic mode remain enabled. An unauthenticated request redirects to
+Google sign-in; the TexMed Chrome profile loaded the dashboard, `/api/session`
+returned `gowtham@texmed.us` as reviewer with synthetic mode, and exact NPI
+`1447268255` returned live NPPES data and the dated LEIE snapshot. A separate
+in-app browser session received an IAP access denial; access was verified in
+the signed-in TexMed Chrome profile. Firestore case writes were not retested
+on this revision.
+
+On October 20, revision `npi-console-00011-twg` was deployed to the same TexMed
+project and serves 100% of traffic. The deployment preflight verified
+`gowtham@texmed.us`, the live linked billing account, organization ancestry,
+and a project-scoped budget. The release passed 183 tests and 16/16 offline
+evaluation gates. IAP and synthetic mode remain enabled. Authenticated Chrome
+smoke checks loaded Home, the one-click synthetic sample, live NPPES field
+comparison, and a saved synthetic directory. A Firestore-backed directory
+survived reload and a manual recheck. An unauthenticated API request redirected
+to Google sign-in. Scheduled checks and notifications are not configured.

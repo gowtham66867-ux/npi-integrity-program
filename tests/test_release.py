@@ -1,6 +1,5 @@
 """Billing, case persistence, role and concurrent update regression tests."""
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 import importlib.util
 from pathlib import Path
@@ -13,41 +12,24 @@ from npi_integrity import security
 spec = importlib.util.spec_from_file_location('preflight', Path(__file__).parents[1] / 'deploy' / 'preflight.py')
 preflight = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(preflight)
-NOW = datetime.now(timezone.utc)
-
-
 def policy():
-    return {'expected_identity':'gowtham@texmed.us','forbidden_card_last4':['6022'],
+    return {'expected_identity':'gowtham@texmed.us',
             'approved_project':'texmed-test', 'approved_billing_account':'AAAAAA-BBBBBB-CCCCCC',
-            'approved_organization':'123', 'approved_primary_card_last4':'8192',
-            'payment_methods_verified_at':NOW.isoformat(), 'payment_methods_verified_by':'gowtham@texmed.us',
-            'payment_verification_source':'google_cloud_payment_methods_console',
-            'active_payment_method_last4':['8192'], 'region':'us-central1'}
+            'approved_organization':'123', 'region':'us-central1'}
 
 
 def test_verified_policy_passes():
-    preflight.validate_policy(policy(), NOW)
+    preflight.validate_policy(policy())
 
 
 @pytest.mark.parametrize('changes', [
-    {'expected_identity':'personal@gmail.com'}, {'forbidden_card_last4':[]},
-    {'active_payment_method_last4':['8192','6022']}, {'approved_primary_card_last4':'6022'}, {'approved_primary_card_last4':'1234'},
+    {'expected_identity':'personal@gmail.com'},
     {'approved_project':None}, {'approved_billing_account':None}, {'approved_organization':None},
-    {'region':'asia-south1'}, {'active_payment_method_last4':[]},
-    {'active_payment_method_last4':['full-card-number']},
-    {'payment_methods_verified_at':(NOW-timedelta(hours=25)).isoformat()},
-    {'payment_methods_verified_at':(NOW+timedelta(seconds=1)).isoformat()},
-    {'payment_verification_source':'account_name'}, {'payment_methods_verified_by':'other@texmed.us'},
+    {'approved_billing_account':'invalid'}, {'region':'asia-south1'},
 ])
 def test_billing_policy_fails_closed(changes):
     with pytest.raises(preflight.Refused):
-        preflight.validate_policy({**policy(), **changes}, NOW)
-
-
-def test_blocked_card_cannot_be_overridden(monkeypatch):
-    monkeypatch.setenv('FORBIDDEN_CARD_LAST4','9999')
-    with pytest.raises(preflight.Refused):
-        preflight.validate_policy({**policy(), 'active_payment_method_last4':['8192','6022']}, NOW)
+        preflight.validate_policy({**policy(), **changes})
 
 
 def cloud_query(args, account):
@@ -58,6 +40,8 @@ def cloud_query(args, account):
         return {'open':True, 'parent':'organizations/123'}
     if args[:2] == ['projects','describe']:
         return {'projectNumber':'999', 'parent':{'type':'organization','id':'123'}}
+    if args[:2] == ['projects','get-ancestors']:
+        return [{'type':'project','id':'texmed-test'}, {'type':'organization','id':'123'}]
     return [{'budgetFilter':{'projects':['projects/999']}, 'thresholdRules':[{'thresholdPercent':0.5}]}]
 
 
@@ -77,6 +61,24 @@ def test_budget_must_cover_selected_project():
         return [] if args[:3] == ['billing','budgets','list'] else cloud_query(args, account)
     with pytest.raises(preflight.Refused):
         preflight.check_cloud(policy(), wrong)
+
+
+def test_project_folder_ancestry_must_end_at_texmed_organization():
+    def with_folder(args, account):
+        if args[:2] == ['projects','describe']:
+            return {'projectNumber':'999', 'parent':{'type':'folder','id':'456'}}
+        if args[:2] == ['projects','get-ancestors']:
+            return [{'type':'project','id':'texmed-test'}, {'type':'folder','id':'456'},
+                    {'type':'organization','id':'123'}]
+        return cloud_query(args, account)
+    assert preflight.check_cloud(policy(), with_folder)['project_number'] == '999'
+    def wrong_org(args, account):
+        if args[:2] == ['projects','get-ancestors']:
+            return [{'type':'project','id':'texmed-test'}, {'type':'folder','id':'456'},
+                    {'type':'organization','id':'personal'}]
+        return with_folder(args, account)
+    with pytest.raises(preflight.Refused):
+        preflight.check_cloud(policy(), wrong_org)
 
 
 @pytest.fixture

@@ -3,5 +3,8 @@ data
 evals/reports
 .claude
 .pytest_cache
+.codex-build
+presentations
+release_reports
 **/__pycache__
 *.pyc

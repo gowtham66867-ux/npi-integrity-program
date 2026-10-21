@@ -11,7 +11,7 @@ from collections import Counter
 import json
 import os
 import threading
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -22,10 +22,25 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 from .security import authenticate, actor_for
 from .cases import store, case_key, event
+from .directory import store as directory_store, owner_key, utcnow
 
 from . import config
 from .ingest import SOURCES
 from .pipeline import audit, connect, latest_run, now, rerun_alert
+from .ux import compared_field, npi_valid, provider_assessment
+from .nppes_live import lookup as lookup_nppes
+from .leie_public import check as check_leie, load_snapshot as load_leie_snapshot
+from .engine import explain_score
+
+
+def _score_explanation(run_id: str, hits: list[dict], expected: int | None) -> dict | None:
+    """Use the scoring file archived with this run, never today's editable rules."""
+    import yaml
+    path = config.RUNS / run_id / "rules" / "scoring.yaml"
+    if expected is None or not path.is_file():
+        return None
+    explanation = explain_score(hits, yaml.safe_load(path.read_text()))
+    return explanation if explanation["score"] == expected else None
 
 STATIC = Path(__file__).parent / "static"
 app = FastAPI(title="NPI Integrity - reviewer console", version="0.2.0")
@@ -82,9 +97,41 @@ def healthz():
 
 @app.get("/api/session")
 def session(request: Request):
+    role = getattr(request.state, "role", "local_demo")
     return {"actor": getattr(request.state, "actor", None),
-            "role": getattr(request.state, "role", "local_demo"),
+            "role": role,
+            "modes": ["clinic", "government"] if role in ("local_demo", "reviewer", "supervisor") else ["clinic"],
             "data_mode": os.environ.get("NPI_DATA_MODE", "local_demo")}
+
+
+def _public_coverage(snapshot: dict, today: date) -> dict:
+    """Describe what the public checks can actually establish, without a provider lookup."""
+    try:
+        as_of = date.fromisoformat(snapshot["source_updated_at"])
+        fetched = datetime.fromisoformat(snapshot["fetched_at"].replace("Z", "+00:00"))
+        if fetched.tzinfo is None or as_of > today:
+            raise ValueError("invalid snapshot date")
+        age_days = (today - as_of).days
+        return {"status": "stale" if age_days > 45 else "dated_snapshot",
+                "source_updated_at": as_of.isoformat(), "fetched_at": fetched.isoformat(),
+                "age_days": age_days, "exact_npi_rows": snapshot["rows_with_npi"],
+                "total_rows": snapshot["total_rows"]}
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return {"status": "unavailable"}
+
+
+@app.get("/api/coverage")
+def coverage():
+    try:
+        leie = _public_coverage(load_leie_snapshot(), datetime.now(timezone.utc).date())
+    except HTTPException:
+        leie = {"status": "unavailable"}
+    return {"nppes": {"status": "on_demand", "scope": "one exact NPI per live request"},
+            "leie": leie,
+            "claims": {"status": "synthetic", "scope": "demo claims; no production claim feed"},
+            "medicare_activity": {"status": "not_connected"},
+            "state_licensing": {"status": "not_connected"},
+            "social_activity": {"status": "not_connected"}}
 
 
 @contextmanager
@@ -332,7 +379,7 @@ def _draft_summary(p, hits):
     for h in hits:
         cite = ", ".join([s["eid"] for s in h["sources"]] + ([h["claims_eid"]] if h.get("claims_eid") else []))
         out.append(f"{h['reason_code']} ({h['rule_id']} v{h['version']}): {h['reason']}" + (f" [{cite}]" if cite else ""))
-    out.append("These are anomalies for human review, not a fraud determination.")
+    out.append("Potential anomalies require human verification before any decision.")
     return out
 
 
@@ -365,6 +412,7 @@ def _alert_detail(cur, alert_id):
         FROM graph_edges g JOIN mine USING (dst) JOIN alerts a2 ON a2.npi = g.src AND a2.run_id = ?
         WHERE g.src <> ? ORDER BY a2.score DESC LIMIT 60""", [a["npi"], a["run_id"], a["npi"]])
     return clean({"alert": a, "hits": hits, "provider": p, "related": related, "dispositions": [],
+                  "score_explanation": _score_explanation(a["run_id"], hits, a["score"]),
                   "draft_summary": _draft_summary(p, hits), "rules_meta": json.loads(run["rules_json"])})
 
 
@@ -377,7 +425,136 @@ def provider(npi: str):
                                [rid, npi]), rid)
     s = one(cur, "SELECT score, tier FROM scores WHERE run_id = ? AND npi = ?", [rid, npi])
     a = one(cur, "SELECT alert_id FROM alerts WHERE run_id = ? AND npi = ?", [rid, npi])
-    return clean({"provider": p, "hits": hits, "score": s, "alert": a})
+    return clean({"provider": p, "hits": hits, "score": s, "alert": a,
+                  "score_explanation": _score_explanation(rid, hits, s["score"] if s else None),
+                  "assessment": provider_assessment(s, hits, p["status"]),
+                  "as_of": one(cur, "SELECT as_of FROM runs WHERE run_id = ?", [rid])["as_of"]})
+
+
+@app.get("/api/nppes/{npi}")
+def live_nppes(npi: str):
+    """Read one public NPPES record without joining synthetic signals."""
+    return lookup_nppes(npi)
+
+
+@app.get("/api/public-integrity/{npi}")
+def public_integrity(npi: str):
+    """Exact-NPI OIG snapshot check, independent of synthetic detection data."""
+    return {"leie": check_leie(npi)}
+
+
+class VerificationInput(BaseModel):
+    npi: str = Field(min_length=10, max_length=10)
+    name: str = Field(default="", max_length=120)
+    street_address: str = Field(default="", max_length=160)
+    city: str = Field(default="", max_length=80)
+    state: str = Field(default="", max_length=2)
+    zip_code: str = Field(default="", max_length=10)
+    taxonomy: str = Field(default="", max_length=120)
+    license: str = Field(default="", max_length=80)
+
+
+@app.post("/api/verify")
+def verify_provider(body: VerificationInput):
+    if not npi_valid(body.npi):
+        raise HTTPException(400, "Enter a valid 10-digit NPI")
+    p = lookup_nppes(body.npi)
+    fields = [("Name", body.name, p["name"]), ("Street address", body.street_address, p.get("street_address")),
+              ("City", body.city, p["city"]), ("State", body.state, p["state"]),
+              ("ZIP", body.zip_code, p.get("postal_code")), ("Taxonomy", body.taxonomy, p["taxonomy"]),
+              ("License", body.license, None)]
+    return {"npi": body.npi, "source": "Live NPPES Registry", "last_updated": p["last_updated"],
+            "retrieved_at": p.get("retrieved_at"),
+            "source_url": p["source_url"], "fields": [{"field": label, "entered": entered,
+            "official": official, "result": compared_field(label, entered, official)}
+            for label, entered, official in fields],
+            "note": "Comparison uses a live NPPES lookup. A close match only normalizes a street suffix or five-digit ZIP against ZIP+4. A match does not establish licensing or credentialing. License verification is not connected. Values entered are not saved."}
+
+
+class RosterInput(BaseModel):
+    npis: list[str] = Field(min_length=1, max_length=100)
+
+
+@app.post("/api/roster/check")
+def check_roster(body: RosterInput):
+    if os.environ.get("NPI_DATA_MODE", "local_demo") not in ("local_demo", "synthetic"):
+        raise HTTPException(403, "roster checking is limited to the synthetic pilot")
+    if len(set(body.npis)) != len(body.npis) or any(not npi_valid(n) for n in body.npis):
+        raise HTTPException(400, "Roster requires unique, valid 10-digit NPIs")
+    cur = db()
+    rid = current_run(cur)
+    results = []
+    for npi in body.npis:
+        p = one(cur, "SELECT npi, display_name, status FROM providers WHERE npi = ?", [npi])
+        if not p:
+            results.append({"npi": npi, "name": "Not in pilot snapshot", "label": "Cannot check yet", "reason": "No source record in this pilot"})
+            continue
+        hits = rows(cur, "SELECT reason FROM rule_hits WHERE run_id = ? AND npi = ? ORDER BY hard DESC, weight DESC LIMIT 1", [rid, npi])
+        s = one(cur, "SELECT score, tier FROM scores WHERE run_id = ? AND npi = ?", [rid, npi])
+        assessment = provider_assessment(s, hits, p["status"])
+        results.append({"npi": npi, "name": p["display_name"], "label": assessment["label"],
+                        "reason": assessment["sentence"]})
+    return {"results": results, "saved": False, "note": "One-time synthetic pilot check. No roster is stored or monitored."}
+
+
+def _directory_owner(request: Request) -> str:
+    actor = getattr(request.state, "actor", None)
+    if os.environ.get("K_SERVICE") and not actor:
+        raise HTTPException(403, "verified sign-in required")
+    return owner_key(actor or "local_demo")
+
+
+def directory_as_of() -> str:
+    cur = db()
+    rid = current_run(cur)
+    return str(one(cur, "SELECT as_of FROM runs WHERE run_id = ?", [rid])["as_of"])
+
+
+@app.get("/api/directory")
+def get_directory(request: Request):
+    document = directory_store().get(_directory_owner(request))
+    return document or {"saved": False, "note": "No saved synthetic directory. Scheduled checks and notifications are not enabled."}
+
+
+@app.post("/api/directory")
+def save_directory(request: Request, body: RosterInput):
+    result = check_roster(body)
+    owner = _directory_owner(request)
+    prior = directory_store().get(owner)
+    document = {"saved": True, "npis": body.npis, "results": result["results"],
+                "as_of": directory_as_of(), "last_checked_at": utcnow(),
+                "changes": [], "note": "Saved synthetic directory. Recheck manually; scheduled checks and notifications are not enabled."}
+    directory_store().put(owner, document, "replace" if prior else "create")
+    return document
+
+
+@app.post("/api/directory/recheck")
+def recheck_directory(request: Request):
+    owner = _directory_owner(request)
+    previous = directory_store().get(owner)
+    if not previous:
+        raise HTTPException(404, "No saved directory")
+    result = check_roster(RosterInput(npis=previous["npis"]))
+    before = {r["npi"]: r for r in previous["results"]}
+    changes = [{"npi": r["npi"], "before": before[r["npi"]]["label"], "after": r["label"]}
+               for r in result["results"] if r["label"] != before[r["npi"]]["label"]]
+    document = {**previous, "results": result["results"], "as_of": directory_as_of(),
+                "last_checked_at": utcnow(), "changes": changes}
+    directory_store().put(owner, document, "recheck")
+    return document
+
+
+@app.delete("/api/directory")
+def delete_directory(request: Request):
+    directory_store().delete(_directory_owner(request))
+    return {"saved": False}
+
+
+@app.get("/api/government/leads")
+def government_leads(request: Request):
+    if getattr(request.state, "role", "local_demo") not in ("local_demo", "reviewer", "supervisor"):
+        raise HTTPException(403, "government view is not enabled for this account")
+    return alerts()
 
 
 @app.get("/api/providers/{npi}/graph")
@@ -498,7 +675,7 @@ def package(alert_id: str, request: Request, actor: str = "reviewer"):
     h1{{font-size:22px}}h2{{font-size:16px;border-bottom:2px solid #2f9e44;padding-bottom:4px;margin-top:28px}}
     table{{border-collapse:collapse;width:100%;font-size:12px}}td,th{{border:1px solid #cbd5e1;padding:4px 6px;text-align:left;vertical-align:top}}
     th{{background:#0f2340;color:#fff}}.note{{background:#fff7e6;border:1px solid #f0b429;padding:8px 12px}}</style></head><body>
-    <p class="note"><b>Anomaly referral, not a fraud determination.</b> Prepared from public and synthetic data
+    <p class="note"><b>Potential anomaly for human verification.</b> Prepared from public and synthetic data
     (prototype). Generated {e(now().isoformat(timespec='seconds'))} UTC by {e(actor)}.</p>
     <h1>Referral package: {e(a['alert_id'])}</h1>
     <table><tr><th>NPI</th><th>Name</th><th>Taxonomy</th><th>Location</th><th>Score</th><th>Status</th></tr>

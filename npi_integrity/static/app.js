@@ -10,7 +10,8 @@ const statusTag = (s) => `<span class="status ${esc(String(s).replace(" ", "-"))
 const chips = (ids, hl, cls = "hard") => (ids || []).map((r) => `<span class="chip ${hl && hl.has(r) ? cls : ""}">${esc(r)}</span>`).join("");
 const HARD_RULES = new Set(["D-01", "D-02", "D-03", "D-04", "D-05", "D-06", "D-07"]);
 
-let SESSION = {actor: null, role: "local_demo"};
+let SESSION = {actor: null, role: "local_demo", modes: ["clinic", "government"]};
+let MODE = "clinic";
 function reviewer() {
   if (SESSION.actor) return SESSION.actor;
   try { return localStorage.getItem("npi.reviewer") || ""; } catch { return ""; }
@@ -33,13 +34,44 @@ function toast(msg) {
 }
 
 let SUMMARY = null;
+let COVERAGE = null;
+const OPEN = new Set(["New", "In review", "Monitoring", "Escalated"]);
+function nextReviewStep(a) {
+  return ({"New": "Start review", "In review": "Verify evidence", "Monitoring": "Recheck next run",
+    "Escalated": "Consider referral", "Referred": "Referral recorded", "Dismissed": "Review closed"})[a.status] || "Inspect case";
+}
+function coveragePanel() {
+  const leie = COVERAGE?.leie || {status: "unavailable"};
+  const leieText = leie.status === "unavailable" ? "Snapshot unavailable; no exclusion conclusion" :
+    `${leie.status === "stale" ? "Outdated snapshot" : "Dated snapshot"} · source ${mdy(leie.source_updated_at)} · ${fmtN(leie.exact_npi_rows)} of ${fmtN(leie.total_rows)} rows have an NPI`;
+  return `<section class="card coverage-card" aria-label="Data coverage and availability"><div class="section-head"><div><div class="eyebrow">Data coverage</div><h2>What can be checked now</h2></div><a href="#/sources">Pilot file lineage →</a></div>
+    <div class="coverage-grid"><div><span class="coverage-dot live"></span><strong>CMS NPPES</strong><p>Live, one exact NPI on demand. Identity, taxonomy and published address only.</p></div>
+    <div><span class="coverage-dot ${leie.status === "stale" || leie.status === "unavailable" ? "warn" : "dated"}"></span><strong>OIG LEIE</strong><p>${esc(leieText)}. Name-only rows are not checked.</p></div>
+    <div><span class="coverage-dot demo"></span><strong>Activity and scoring</strong><p>Synthetic claims through ${mdy(SUMMARY.claims.hi)}. No live claim-level feed or fraud finding.</p></div>
+    <div><span class="coverage-dot off"></span><strong>Additional live sources</strong><p>Medicare activity, state licenses and social signals are not connected.</p></div></div></section>`;
+}
 async function loadSummary() {
   SESSION = await api("/api/session");
+  try { MODE = sessionStorage.getItem("npi.mode") || MODE; } catch {}
+  if (location.hash === "#/leads" || location.hash === "#/watch") MODE = "government";
+  MODE = SESSION.modes.includes(MODE) ? MODE : SESSION.modes[0];
+  $("#mode-switch").innerHTML = SESSION.modes.length > 1
+    ? SESSION.modes.map((m) => `<button class="mode-button ${MODE === m ? "active" : ""}" data-mode="${m}" aria-pressed="${MODE === m}">${m === "clinic" ? "Clinic / Facility" : "Government"}</button>`).join("")
+    : `<span class="small muted">Clinic / Facility</span>`;
+  $("#mode-switch").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
+    MODE = b.dataset.mode;
+    try { sessionStorage.setItem("npi.mode", MODE); } catch {}
+    $("#mode-switch").querySelectorAll("button").forEach((button) => { button.classList.toggle("active", button.dataset.mode === MODE); button.setAttribute("aria-pressed", String(button.dataset.mode === MODE)); });
+    document.querySelectorAll("#nav a").forEach((a) => a.classList.toggle("hidden", !!a.dataset.modes && !a.dataset.modes.split(" ").includes(MODE)));
+    location.hash = MODE === "clinic" ? "#/home" : "#/leads";
+  }));
+  document.querySelectorAll("#nav a").forEach((a) => a.classList.toggle("hidden", !!a.dataset.modes && !a.dataset.modes.split(" ").includes(MODE)));
   if (SESSION.actor) {
     $("#reviewer").value = SESSION.actor;
     $("#reviewer").readOnly = true;
   }
   SUMMARY = await api("/api/summary");
+  try { COVERAGE = await api("/api/coverage"); } catch { COVERAGE = null; }
   const r = SUMMARY.run, c = SUMMARY.claims;
   $("#runbar").innerHTML = `<span>Run <b class="mono">${esc(r.run_id)}</b></span>
     <span>Inputs as of <b>${mdy(r.as_of)}</b></span>
@@ -49,35 +81,214 @@ async function loadSummary() {
 }
 
 /* ---------------------------------------------------------------- router */
-const routes = { queue: viewQueue, watch: viewWatch, alert: viewAlert, provider: viewProvider, scorecard: viewScorecard, rules: viewRules, sources: viewSources, audit: viewAudit };
+const routes = { home: viewHome, live: viewLiveNppes, verify: viewVerify, roster: viewRoster, leads: viewLeads, methodology: viewMethodology,
+  queue: viewQueue, watch: viewWatch, alert: viewAlert, provider: viewProvider, scorecard: viewScorecard, rules: viewRules, sources: viewSources, audit: viewAudit };
+let routeId = 0;
 async function route() {
-  const [, view = "queue", arg] = location.hash.split("/");
-  document.querySelectorAll("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.v === view));
+  const currentRoute = ++routeId;
+  const [, requested, arg] = location.hash.split("/");
   app.innerHTML = `<p class="muted pad">Loading…</p>`;
   try {
     if (!SUMMARY) await loadSummary();
-    await (routes[view] || viewQueue)(arg && decodeURIComponent(arg));
+    if (currentRoute !== routeId) return;
+    const view = requested || (MODE === "clinic" ? "home" : "leads");
+    if ((view === "leads" || view === "watch") && !SESSION.modes.includes("government")) throw new Error("This view is not enabled for your account.");
+    document.querySelectorAll("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.v === view));
+    await (routes[view] || viewHome)(arg && decodeURIComponent(arg), currentRoute);
   } catch (e) {
-    app.innerHTML = `<div class="card"><h2>Something went wrong</h2><p>${esc(e.message)}</p></div>`;
+    if (currentRoute === routeId) app.innerHTML = `<div class="card"><h2>Something went wrong</h2><p>${esc(e.message)}</p></div>`;
   }
-  window.scrollTo(0, 0);
+  if (currentRoute === routeId) window.scrollTo(0, 0);
 }
 window.addEventListener("hashchange", route);
-$("#search").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const q = $("#q").value.trim();
+async function runSearch(q) {
   if (!q) return;
+  if (/^\d{10}$/.test(q)) { location.hash = `#/live/${q}`; return; }
   const res = await api(`/api/search?q=${encodeURIComponent(q)}`);
   if (res.length === 1) { location.hash = `#/provider/${res[0].npi}`; return; }
-  app.innerHTML = `<h1>Search: ${esc(q)}</h1><div class="tablewrap"><table class="t"><tr><th>NPI</th><th>Name</th><th>Taxonomy</th><th>Location</th><th>Status</th></tr>
+  app.innerHTML = `<h1>Synthetic demo search: ${esc(q)}</h1><p class="small muted">Name search covers only the synthetic pilot. For a real provider, enter the exact 10-digit NPI in Live NPPES.</p><div class="tablewrap"><table class="t"><tr><th>NPI</th><th>Name</th><th>Taxonomy</th><th>Location</th><th>Status</th></tr>
     ${res.map((p) => `<tr class="click" data-href="#/provider/${p.npi}"><td class="mono">${p.npi}</td><td>${esc(p.display_name)}</td><td>${esc(p.taxonomy_desc)}</td><td>${esc(title(p.city))}, ${esc(p.state)}</td><td>${esc(p.status)}</td></tr>`).join("") || `<tr><td colspan=5 class="muted">No matches</td></tr>`}</table></div>`;
+}
+$("#search").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try { await runSearch($("#q").value.trim()); } catch (err) { toast(err.message); }
 });
+
+async function viewHome(_arg, currentRoute) {
+  const items = await api("/api/alerts");
+  if (currentRoute !== routeId) return;
+  const first = items.find((a) => OPEN.has(a.status));
+  app.innerHTML = `<section class="hero card"><div class="eyebrow">Clinic / Facility</div><h1>What would you like to check?</h1>
+    <p class="muted">Enter an exact NPI to check the live CMS record. The alert demo and claims remain synthetic.</p>
+    <form id="home-search" class="hero-search"><label for="home-q">10-digit NPI</label><div><input id="home-q" required inputmode="numeric" pattern="[0-9]{10}" maxlength="10" autocomplete="off" placeholder="Enter a 10-digit NPI"><button class="b primary">Check live NPPES</button></div></form>
+    <p class="small muted">Do not enter patient data. NPPES does not verify licensing or credentialing.</p>
+    <p class="small"><a href="#/provider/1136934696">Try a synthetic sample: Gregory N Darick, NPI 1136934696 →</a></p></section>
+    <div class="journeys"><a class="journey card" href="#/home" id="focus-search"><strong>Check a provider →</strong><span>See current signals and the dated evidence.</span></a>
+      <a class="journey card" href="#/verify"><strong>Verify our information →</strong><span>Compare your fields with a live NPPES record.</span></a>
+      <a class="journey card" href="#/roster"><strong>Monitor my directory →</strong><span>Save up to 100 synthetic NPIs and recheck them manually.</span></a></div>
+    ${coveragePanel()}
+    <section class="card home-review"><div class="section-head"><div><div class="eyebrow">Synthetic review workbench</div><h2>${fmtN(items.filter((a) => OPEN.has(a.status)).length)} open cases</h2></div><a href="#/queue">Open case queue →</a></div>
+      ${first ? `<a class="featured-case" href="#/alert/${esc(first.alert_id)}"><span><b>${esc(first.display_name || first.npi)}</b><span class="small muted">${esc(first.top_reason || "View evidence")}</span></span><span>${statusTag(first.status)}<small>${esc(nextReviewStep(first))} →</small></span></a>` : `<p class="muted">No current alerts.</p>`}
+      <p class="small muted">These cases use synthetic claims and dated pilot source files. Review the source record before any real-world decision.</p></section>`;
+  $("#home-search").addEventListener("submit", async (e) => { e.preventDefault(); try { await runSearch($("#home-q").value.trim()); } catch (err) { toast(err.message); } });
+  $("#focus-search").addEventListener("click", (e) => { e.preventDefault(); $("#home-q").focus(); });
+}
+
+async function viewLiveNppes(npi, currentRoute) {
+  if (!npi) {
+    app.innerHTML = `<h1>Public provider check</h1><p class="muted">Check one live NPPES profile and a dated OIG exclusion snapshot by exact 10-digit NPI. This does not run synthetic alerts or verify licensing, enrollment, or claims.</p>
+      <form id="live-search" class="card hero-search"><label for="live-npi">10-digit NPI</label><div><input id="live-npi" required inputmode="numeric" pattern="[0-9]{10}" maxlength="10" autocomplete="off"><button class="b primary">Look up NPI</button></div></form>`;
+    $("#live-search").addEventListener("submit", (e) => { e.preventDefault(); location.hash = `#/live/${$("#live-npi").value.trim()}`; });
+    return;
+  }
+  const [profileResponse, leieResponse] = await Promise.allSettled([
+    api(`/api/nppes/${encodeURIComponent(npi)}`),
+    api(`/api/public-integrity/${encodeURIComponent(npi)}`),
+  ]);
+  if (currentRoute !== routeId) return;
+  const p = profileResponse.status === "fulfilled" ? profileResponse.value : null;
+  const profileCard = p ? `<div class="card alerthead"><div>
+      <div class="eyebrow">LIVE CMS NPPES REGISTRY · retrieved ${esc(p.retrieved_at.slice(0, 16).replace("T", " "))} UTC</div>
+      <h1>${esc(p.name)}</h1><p class="muted"><span class="mono">${esc(p.npi)}</span> · ${esc(p.entity_type || "Type unavailable")} · ${esc(p.taxonomy || "Taxonomy unavailable")}</p>
+      <div class="finding"><strong>${esc(p.status)} NPPES record</strong><p>${p.status === "Active" ? "This NPI appears as active in the Registry. That does not establish licensing, credentialing, Medicare enrollment, or absence of exclusion." : "Review the Registry record and dates directly; no eligibility conclusion is made here."}</p></div>
+      <p class="small muted">Record last updated ${mdy(p.last_updated)} · enumerated ${mdy(p.enumeration_date)}. Live source data; no synthetic score is assigned.</p></div></div>
+      <div class="card" style="margin-top:16px"><h2>Published provider details</h2><dl class="kv">
+        <dt>Primary taxonomy</dt><dd>${esc(p.taxonomy || "Unavailable")} ${p.taxonomy_code ? `<span class="mono small">${esc(p.taxonomy_code)}</span>` : ""}</dd>
+        <dt>Practice location</dt><dd>${esc(p.city || "Unavailable")}, ${esc(p.state || "")} ${esc(p.postal_code || "")}</dd>
+        <dt>Source</dt><dd><a href="${esc(p.source_url)}" target="_blank" rel="noopener noreferrer">Open this record in the CMS NPI Registry ↗</a></dd>
+      </dl><p class="small muted">This is a single live lookup. Enrollment, licensing, and claim-level checks require separate verified sources.</p></div>`
+    : `<div class="card"><h1>NPI ${esc(npi)}</h1><div class="banner" role="alert">Live NPPES profile unavailable: ${esc(profileResponse.reason?.message || "Lookup failed")}. A missing Registry result is not a clearance or deactivation finding; check the official deactivation file.</div></div>`;
+  app.innerHTML = `<p class="small"><a href="#/live">← Check another NPI</a></p>${profileCard}
+    <div class="card" style="margin-top:16px" id="public-integrity" aria-live="polite"><h2>Public exclusion check</h2><p class="muted">Checking the dated OIG snapshot…</p></div>
+    <div class="card" style="margin-top:16px"><h2>Data coverage for this provider check</h2>
+    <ul><li><strong>NPPES identity:</strong> ${p ? "live lookup above" : "unavailable; no profile conclusion"}.</li>
+      <li><strong>OIG LEIE:</strong> dated exact-NPI snapshot above; name-only rows are not checked.</li>
+      <li><strong>Medicare annual activity:</strong> not connected yet; no utilization conclusion is available.</li>
+      <li><strong>Claim-level activity:</strong> not connected. The separate potential-anomaly demo uses synthetic claims.</li></ul></div>`;
+  if (leieResponse.status === "fulfilled") {
+    const {leie} = leieResponse.value;
+    const matchRows = leie.matches.map((m) => `<li><strong>${esc(m.name || "Name unavailable")}</strong> · ${esc(m.city || "City unavailable")}, ${esc(m.state || "State unavailable")} · exclusion type ${esc(m.exclusion_type || "unavailable")} · effective ${esc(mdy(String(m.exclusion_date || "").replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3")))}</li>`).join("");
+    $("#public-integrity").innerHTML = `<h2>OIG LEIE exclusion snapshot</h2><div class="finding ${leie.matches.length ? "attention" : ""}"><strong>${esc(leie.result)}</strong>
+      <p>${leie.matches.length ? "A published LEIE row contains this exact NPI. Confirm the person or organization in OIG's official search before taking action." : "No row publishing this exact NPI was found in this snapshot. This is not exclusion clearance: most LEIE rows do not publish an NPI."}</p></div>
+      ${leie.stale ? `<div class="banner" role="alert">Snapshot is over 45 days old. Refresh the source before relying on it.</div>` : ""}
+      ${matchRows ? `<ul>${matchRows}</ul>` : ""}
+      <p class="small muted">OIG source updated ${mdy(leie.source_updated_at)} · downloaded ${esc(leie.fetched_at.slice(0, 10))} · ${fmtN(leie.indexed_rows)} of ${fmtN(leie.total_rows)} rows publish a 10-digit NPI.</p>
+      <details><summary>Source checksum</summary><span class="mono source-hash">SHA-256: ${esc(leie.source_sha256)}</span></details>
+      <p class="small muted">${esc(leie.note)} <a href="${esc(leie.search_url)}" target="_blank" rel="noopener noreferrer">Verify in OIG search ↗</a></p>`;
+  } else {
+    $("#public-integrity").innerHTML = `<h2>OIG LEIE exclusion snapshot</h2><div class="banner" role="alert">Cannot check yet: ${esc(leieResponse.reason?.message || "Lookup failed")}. No exclusion conclusion is available.</div>`;
+  }
+}
+
+async function viewVerify(_arg, currentRoute) {
+  app.innerHTML = `<h1>Verify our information</h1><p class="muted">Compare your fields with a live CMS NPPES lookup for one exact NPI. Values entered are not saved; do not enter patient data.</p>
+    <form id="verify-form" class="card field-form"><label>NPI <input name="npi" inputmode="numeric" pattern="[0-9]{10}" maxlength="10" required></label>
+      <label>Name <input name="name" maxlength="120"></label><label>Street address <input name="street_address" maxlength="160"></label>
+      <label>City <input name="city" maxlength="80"></label><label>State <input name="state" maxlength="2"></label>
+      <label>ZIP <input name="zip_code" maxlength="10"></label><label>Taxonomy <input name="taxonomy" maxlength="120"></label>
+      <label>License number <input name="license" maxlength="80" aria-describedby="license-note"></label>
+      <p id="license-note" class="small muted">License source is not connected; this field will say “Cannot check yet.”</p>
+      <button class="b primary">Compare with source</button></form><div id="verify-results" aria-live="polite"></div>`;
+  const resultBox = $("#verify-results");
+  $("#verify-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const body = Object.fromEntries(new FormData(e.target).entries());
+    try {
+      const result = await api("/api/verify", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+      if (currentRoute !== routeId) return;
+      resultBox.innerHTML = `<div class="card result-card print-area"><h2>Comparison for NPI ${esc(result.npi)}</h2><p class="small muted">${esc(result.source)} · record updated ${mdy(result.last_updated)} · retrieved ${esc(result.retrieved_at || "time unavailable")}. ${esc(result.note)} <a href="${esc(result.source_url)}" target="_blank" rel="noopener noreferrer">Open CMS record ↗</a></p>
+        <button class="b print-action" type="button" onclick="window.print()">Print / save PDF</button>
+        <div class="tablewrap"><table class="t"><thead><tr><th>Field</th><th>You entered</th><th>Source record</th><th>Result</th></tr></thead><tbody>${result.fields.map((f) => `<tr><td>${esc(f.field)}</td><td>${esc(f.entered || "—")}</td><td>${esc(f.official || "Unavailable")}</td><td><strong>${esc(f.result)}</strong></td></tr>`).join("")}</tbody></table></div></div>`;
+    } catch (err) { if (currentRoute === routeId) resultBox.innerHTML = `<div class="banner" role="alert">${esc(err.message)}</div>`; }
+  });
+}
+
+async function viewRoster(_arg, currentRoute) {
+  app.innerHTML = `<h1>My synthetic directory</h1><div class="banner">Save only pilot NPIs. Rechecks are manual; scheduled checks and notifications are not enabled. Upload a CSV with exactly one column named <b>npi</b>; do not include patient or clinic data.</div>
+    <form id="roster-form" class="card"><label for="roster-file">Synthetic NPI directory CSV (up to 100 rows)</label><input id="roster-file" type="file" accept=".csv,text/csv" required><button class="b primary">Save and check directory</button></form>
+    <div id="roster-results" aria-live="polite"></div>`;
+  const resultBox = $("#roster-results");
+  const rosterForm = $("#roster-form");
+  const renderDirectory = (result) => {
+    if (currentRoute !== routeId) return;
+    if (!result.saved) { resultBox.innerHTML = `<p class="muted">No saved directory yet.</p>`; return; }
+    const counts = result.results.reduce((out, row) => { out[row.label] = (out[row.label] || 0) + 1; return out; }, {});
+    resultBox.innerHTML = `<div class="card result-card print-area"><h2>Saved directory results</h2>
+      <p>${Object.entries(counts).map(([label, n]) => `${esc(label)}: ${n}`).join(" · ")}</p>
+      <p class="small muted">Pilot inputs as of ${mdy(result.as_of)} · checked ${esc(result.last_checked_at)}. ${esc(result.note)}</p>
+      <p>${(result.changes || []).length ? `${result.changes.length} changed result(s) since the previous check.` : "No result-status changes since the previous check."}</p>
+      <div class="print-action"><button class="b" id="directory-recheck">Recheck now</button> <button class="b" onclick="window.print()">Print / save attestation</button> <button class="b danger" id="directory-delete">Delete directory</button></div>
+      <div class="tablewrap"><table class="t"><thead><tr><th>NPI</th><th>Provider</th><th>Result</th><th>Why</th></tr></thead><tbody>${result.results.map((row) => `<tr><td><a href="#/provider/${esc(row.npi)}">${esc(row.npi)}</a></td><td>${esc(row.name)}</td><td>${esc(row.label)}</td><td>${esc(row.reason)}</td></tr>`).join("")}</tbody></table></div>
+      <p class="small muted">Attestation of a completed synthetic pilot check only. This is not credential or exclusion clearance.</p></div>`;
+    $("#directory-recheck", resultBox).onclick = async () => { try { renderDirectory(await api("/api/directory/recheck", {method:"POST"})); } catch (e) { if (currentRoute === routeId) toast(e.message); } };
+    $("#directory-delete", resultBox).onclick = async () => { if (!confirm("Delete your saved synthetic directory?")) return; try { await api("/api/directory", {method:"DELETE"}); renderDirectory({saved:false}); } catch (e) { if (currentRoute === routeId) toast(e.message); } };
+  };
+  try { renderDirectory(await api("/api/directory")); } catch (e) { if (currentRoute === routeId) resultBox.innerHTML = `<div class="banner" role="alert">${esc(e.message)}</div>`; }
+  if (currentRoute !== routeId) return;
+  rosterForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      const file = $("#roster-file").files[0];
+      if (!file || file.size > 4096) throw new Error("CSV must be 4 KB or smaller.");
+      const lines = (await file.text()).trim().split(/\r?\n/);
+      if (lines.shift()?.trim().toLowerCase() !== "npi" || lines.length < 1 || lines.length > 100 || lines.some((line) => !/^\d{10}$/.test(line.trim())))
+        throw new Error("Use exactly one npi column with 1–100 ten-digit rows.");
+      const result = await api("/api/directory", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({npis:lines.map((line) => line.trim())})});
+      renderDirectory(result);
+    } catch (err) { if (currentRoute === routeId) resultBox.innerHTML = `<div class="banner" role="alert">${esc(err.message)}</div>`; }
+  });
+}
+
+async function viewLeads(_arg, currentRoute) {
+  const items = await api("/api/government/leads");
+  if (currentRoute !== routeId) return;
+  const view = document.createElement("div");
+  view.innerHTML = `<div class="eyebrow">Government · synthetic pilot</div><h1>Review workbench</h1><p class="muted">Work through potential anomalies, verify cited evidence, then record a disposition. Scores prioritize review; they are not fraud probabilities.</p>
+    <div class="kpis"><div class="kpi"><div class="v">${fmtN(items.filter((a) => OPEN.has(a.status)).length)}</div><div class="l">Open leads</div></div>
+      <div class="kpi"><div class="v">${fmtN(items.filter((a) => a.status === "New").length)}</div><div class="l">Awaiting first review</div></div>
+      <div class="kpi"><div class="v">${fmtN(items.filter((a) => a.status === "In review").length)}</div><div class="l">Evidence review underway</div></div>
+      <div class="kpi"><div class="v">${fmtN(items.filter((a) => a.status === "Monitoring").length)}</div><div class="l">Awaiting next run</div></div>
+      <div class="kpi"><div class="v">${fmtN(items.filter((a) => a.status === "Escalated").length)}</div><div class="l">Escalated</div></div></div>
+    ${coveragePanel()}
+    <section class="card worklist-card"><div class="section-head"><div><div class="eyebrow">Action queue</div><h2>Cases needing attention</h2></div><span class="small muted">Select a case to inspect its source evidence</span></div>
+    <div class="filters"><label for="lead-query">Find</label><input id="lead-query" type="search" placeholder="Provider, NPI or reason" aria-label="Find a lead">
+      <label for="lead-state">State</label><select id="lead-state"><option value="">All states</option>${[...new Set(items.map((a) => a.state).filter(Boolean))].sort().map((s) => `<option>${esc(s)}</option>`).join("")}</select>
+      <label for="lead-status">Status</label><select id="lead-status"><option value="Open">Open</option><option value="">All statuses</option>${[...new Set(items.map((a) => a.status))].sort().map((s) => `<option>${esc(s)}</option>`).join("")}</select></div>
+    <div class="tablewrap"><table class="t"><thead><tr><th>Score</th><th>Provider</th><th>State</th><th>Top reason</th><th>Review stage</th><th>Next step</th></tr></thead><tbody id="lead-body"></tbody></table></div>
+    <div class="pager"><span id="lead-count" class="small muted"></span><button class="b" id="lead-prev">Previous</button><button class="b" id="lead-next">Next</button></div></section>`;
+  app.replaceChildren(view);
+  const leadQuery = $("#lead-query", view), leadState = $("#lead-state", view), leadStatus = $("#lead-status", view);
+  const leadBody = $("#lead-body", view), leadCount = $("#lead-count", view);
+  const leadPrev = $("#lead-prev", view), leadNext = $("#lead-next", view);
+  let page = 0;
+  const render = () => {
+    if (currentRoute !== routeId) return;
+    const query = leadQuery.value.trim().toLowerCase();
+    const filtered = items.filter((a) => (!leadState.value || a.state === leadState.value) &&
+      (!leadStatus.value || (leadStatus.value === "Open" ? OPEN.has(a.status) : a.status === leadStatus.value)) &&
+      (!query || [a.display_name, a.npi, a.top_reason].some((value) => String(value || "").toLowerCase().includes(query))));
+    page = Math.min(page, Math.max(0, Math.ceil(filtered.length / 10) - 1));
+    leadBody.innerHTML = filtered.slice(page * 10, page * 10 + 10)
+      .map((a) => `<tr class="click" data-href="#/alert/${esc(a.alert_id)}" tabindex="0" role="link" aria-label="Open lead for ${esc(a.display_name || a.npi)}"><td>${scoreBadge(a.score,a.tier)}</td><td><b>${esc(a.display_name || a.npi)}</b><div class="small muted">${esc(a.npi)}</div></td><td>${esc(a.state)}</td><td>${esc(a.top_reason)}</td><td>${statusTag(a.status)}</td><td><a href="#/alert/${esc(a.alert_id)}">${esc(nextReviewStep(a))} →</a></td></tr>`).join("") || `<tr><td colspan="6">No leads match these filters.</td></tr>`;
+    leadCount.textContent = filtered.length ? `${page * 10 + 1}–${Math.min(page * 10 + 10, filtered.length)} of ${filtered.length}` : "0 leads";
+    leadPrev.disabled = page === 0; leadNext.disabled = (page + 1) * 10 >= filtered.length;
+  };
+  leadQuery.addEventListener("input", () => { page = 0; render(); });
+  leadState.addEventListener("change", () => { page = 0; render(); }); leadStatus.addEventListener("change", () => { page = 0; render(); });
+  leadPrev.addEventListener("click", () => { page--; render(); }); leadNext.addEventListener("click", () => { page++; render(); }); render();
+}
+
+async function viewMethodology() {
+  app.innerHTML = `<h1>Methodology &amp; Admin</h1><p class="muted">Inspect how results were produced, evaluated, and reviewed.</p>
+    <div class="journeys"><a class="journey card" href="#/rules"><strong>Rules →</strong><span>Versioned signals and scoring.</span></a><a class="journey card" href="#/sources"><strong>Sources →</strong><span>Source files and freshness.</span></a>
+    <a class="journey card" href="#/scorecard"><strong>Scorecard →</strong><span>Synthetic pilot evaluation.</span></a><a class="journey card" href="#/audit"><strong>Audit log →</strong><span>Recorded review activity.</span></a></div>`;
+}
 
 /* ---------------------------------------------------------------- queue */
 let QUEUE_FILTER = { tier: "All", status: "Open" };
-const OPEN = new Set(["New", "In review", "Monitoring", "Escalated"]);
-async function viewQueue() {
+async function viewQueue(_arg, currentRoute) {
   const items = await api("/api/alerts");
+  if (currentRoute !== routeId) return;
   const sc = SUMMARY.scorecard, t = SUMMARY.tiers;
   const open = items.filter((a) => OPEN.has(a.status)).length;
   const featured = items.find((a) => a.tier === "Critical");
@@ -137,13 +348,14 @@ async function viewQueue() {
       ${statuses.map((v) => `<button data-k="status" data-v="${v}">${v}</button>`).join("")}
     </div>
     <div class="tablewrap queue-table"><table class="t"><thead><tr><th>Score</th><th>Alert</th><th>Provider</th><th>Reason codes</th><th>Top reason</th><th>Status</th></tr></thead><tbody id="qbody"></tbody></table></div>
-    <p class="small muted">Every alert is an anomaly for human review, never a fraud determination. Hard rules (red) are confirmed data facts that set a score floor of 900. Synthetic results do not establish real-world accuracy.</p>`;
+    <p class="small muted">Potential anomalies require human verification. A red rule indicator means the rule met its hard-evidence conditions and sets a 900-point floor; it is not a verdict. <a href="#/rules">How scores and bands work</a>. Synthetic results do not establish real-world accuracy.</p>`;
   document.querySelectorAll(".filters button").forEach((b) => b.addEventListener("click", () => { QUEUE_FILTER[b.dataset.k] = b.dataset.v; render(); }));
   render();
 }
 
-async function viewWatch() {
+async function viewWatch(_arg, currentRoute) {
   const items = await api("/api/watchlist");
+  if (currentRoute !== routeId) return;
   app.innerHTML = `<h1>Watch list</h1><p class="muted">Scored but below the alert threshold (550). Re-scored every run; no reviewer action needed. Weak or low-confidence signals land here by design.</p>
     <div class="tablewrap"><table class="t"><tr><th>Score</th><th>Provider</th><th>Signals</th><th>Top reason</th></tr>
     ${items.map((s) => `<tr class="click" data-href="#/provider/${s.npi}"><td>${scoreBadge(s.score, s.tier)}</td>
@@ -166,6 +378,18 @@ function reasonCard(h) {
     <div class="txt">${esc(h.reason)}</div>
     ${src ? `<ul class="evid">${src}</ul>` : ""}${claims}</div>`;
 }
+function plainReasonCard(h) {
+  return `<div class="plain-reason"><strong>${esc(h.reason)}</strong><details><summary>View source evidence and rule details</summary>${reasonCard(h)}</details></div>`;
+}
+
+function scoreChart(info) {
+  if (!info) return `<div class="card"><h2>Why this score?</h2><p class="small muted">A verified breakdown is unavailable for this run. See the rule evidence before interpreting the score.</p></div>`;
+  const bar = (label, value, detail) => `<div class="score-row"><div><strong>${esc(label)}</strong><span>${esc(detail)}</span></div><div class="score-track" role="img" aria-label="${esc(label)}: ${fmtN(value)} of 1000 points"><i style="width:${Math.min(100, 100 * value / 1000)}%"></i></div><b>${fmtN(value)}</b></div>`;
+  const familyRows = info.families.map((f) => bar(`${f.family} signal family`, f.points, f.raw > f.points ? `Capped from ${fmtN(f.raw)}` : "After family cap")).join("");
+  return `<div class="card"><h2>Why this score?</h2><p class="small muted">Synthetic rule contributions for this run. Bars show points before the network multiplier; they are not probabilities.</p>
+    ${info.hard_floor ? bar("Hard-evidence floor", info.hard_floor, "At least one hard rule met its evidence conditions") : ""}${familyRows || `<p class="small muted">No weighted signal points.</p>`}
+    <p class="small muted">${info.network_multiplier > 1 ? `Weighted signal points × ${esc(info.network_multiplier)} for a network link. ` : ""}Final score ${fmtN(info.score)} / ${fmtN(info.ceiling)}${info.score === info.ceiling ? " (capped at 1000)" : ""}; alert setting ${fmtN(info.alert_threshold)}. <a href="#/rules">Band definitions and rules</a>.</p></div>`;
+}
 
 function profileCard(p) {
   const kv = (k, v) => (v ? `<dt>${k}</dt><dd>${v}</dd>` : "");
@@ -176,7 +400,7 @@ function profileCard(p) {
   const ra = (p.reassignments || []).map((r) => esc(title(r.group_name))).join("<br>");
   const orf = p.order_referring ? `In file · Part B ${p.order_referring.partb} · DME ${p.order_referring.dme} · HHA ${p.order_referring.hha}` : (p.entity_type === "1" ? "<b>Not in file</b>" : "");
   const hist = (p.history || []).map((h) => `${mdy(h.change_date)} · ${esc(h.field)}: <span class="small muted">${esc(h.old_value || "")} → </span>${esc(h.new_value || "")}`).join("<br>");
-  return `<div class="card"><h2>Provider profile <span class="small muted">("credit file")</span></h2><dl class="kv">
+  return `<div class="card"><h2>Source profile</h2><dl class="kv">
     ${kv("Name", `<b>${esc(p.display_name)}</b> ${esc(p.credential || "")}`)}
     ${kv("NPI", `<span class="mono">${esc(p.npi)}</span> · type ${p.entity_type === "2" ? "2 (organization)" : "1 (individual)"}`)}
     ${kv("NPPES status", p.status === "Deactivated" ? `<b style="color:var(--red)">Deactivated ${mdy(p.deact_date)}</b>` : `Active${p.react_date ? ` (reactivated ${mdy(p.react_date)})` : ""}`)}
@@ -265,55 +489,70 @@ async function drawGraph(npi, el) {
 }
 const graphLegend = `<div class="legend"><span><i style="background:#1f6fb2"></i>provider</span><span><i style="background:#e8590c"></i>alerted provider</span><span><i style="background:#b7791f"></i>address</span><span><i style="background:#6741d9"></i>person (official)</span><span><i style="background:#c92a2a"></i>exclusion</span><span>squares = organizations</span></div>`;
 
-async function viewAlert(id) {
+async function viewAlert(id, currentRoute = routeId) {
   const d = await api(`/api/alerts/${id}`);
+  if (currentRoute !== routeId) return;
   const a = d.alert, p = d.provider;
+  const assessment = p.status === "Deactivated" ? "Needs attention" : a.tier === "Critical" || a.tier === "High" ? "Needs attention" : "To review";
   const canWrite = ["reviewer", "supervisor", "local_demo"].includes(SESSION.role);
   const canEscalate = ["supervisor", "local_demo"].includes(SESSION.role);
   const closed = ["Dismissed", "Referred"].includes(a.status);
   const disp = d.dispositions.map((x) => `<tr><td>${esc(String(x.ts).slice(0, 16).replace("T", " "))}</td><td>${esc(x.actor)}</td><td>${esc(x.action)}</td><td>${esc(x.supervisor || "")}</td><td>${esc(x.reason || "")}</td></tr>`).join("");
   const related = d.related.filter((r) => r.alert_id !== a.alert_id);
   app.innerHTML = `
-    <p class="small"><a href="#/queue">← Alert queue</a></p>
-    <div class="banner"><b>Anomaly for human review, not a fraud determination.</b> Reasons below are tied to the exact source file, version, and row.</div>
+    <p class="small"><a href="${MODE === "government" ? "#/leads" : "#/queue"}">← ${MODE === "government" ? "Leads" : "Alerts"}</a></p>
+    <div class="banner"><b>Potential anomaly for human review.</b> Verify the evidence before making a decision. Reasons below are tied to the exact source file, version, and row.</div>
+    <div class="review-path card" aria-label="Case review steps"><div><span>1</span><strong>Check identity</strong><small>Confirm the NPI in <a href="#/live/${esc(a.npi)}">live NPPES</a>.</small></div>
+      <div><span>2</span><strong>Review evidence</strong><small>Inspect the dated files and synthetic activity in the Evidence tab.</small></div>
+      <div><span>3</span><strong>Record a decision</strong><small>${esc(nextReviewStep(a))}. Case status: ${esc(a.status)}.</small></div></div>
     <div class="card alerthead">
-      <div><div class="small muted mono">${esc(a.alert_id)} · raised as of ${mdy(a.created_as_of)}</div>
+      <div><div class="small muted mono">${esc(a.alert_id)} · checked as of ${mdy(a.created_as_of)}</div>
         <h1>${esc(p.display_name || a.npi)}</h1>
         <div class="muted"><span class="mono">${esc(a.npi)}</span> · ${esc(p.taxonomy_desc || "")} · ${esc(title(p.city))}, ${esc(p.state)}</div>
-        <div style="margin-top:8px">${statusTag(a.status)} <span class="small muted">fingerprint <span class="mono">${esc(a.fingerprint)}</span></span></div></div>
+        <div class="finding"><strong>${esc(assessment)}</strong><p>${esc(d.hits[0]?.reason || "A signal needs human review.")}</p><div class="small muted">Case: ${statusTag(a.status)} · Source snapshot ${mdy(a.created_as_of)}</div></div></div>
       <div style="text-align:center"><div class="big" style="color:var(--t-${a.tier === "Critical" ? "crit" : a.tier === "High" ? "high" : "elev"})">${a.score}</div><div class="small muted">${esc(a.tier)} · 0–1000</div></div>
       <div class="actions">
-        <button class="b" data-act="review" ${!canWrite || !["New", "Monitoring"].includes(a.status) ? "disabled" : ""}>Start review</button>
+        ${["New", "Monitoring"].includes(a.status) ? `<button class="b primary" data-act="review" ${!canWrite ? "disabled" : ""}>Start review</button>` : `<button class="b primary" id="primary-evidence">Review evidence</button>`}
+        <details class="more-actions"><summary>More case actions</summary><div class="more-action-list">
         <button class="b" data-act="monitor" ${!canWrite || !["New", "In review", "Escalated"].includes(a.status) ? "disabled" : ""}>Monitor</button>
         <button class="b danger" data-act="dismiss" ${!canWrite || closed || a.status === "Escalated" ? "disabled" : ""}>Dismiss</button>
         <button class="b primary" data-act="escalate" ${!canEscalate || !["In review", "Monitoring"].includes(a.status) ? "disabled" : ""}>Escalate</button>
         <button class="b" data-act="reopen" ${!canWrite || a.status !== "Dismissed" ? "disabled" : ""}>Reopen</button>
         <button class="b primary" data-act="refer" ${!canWrite || a.status !== "Escalated" ? "disabled" : ""}>Refer</button>
         <button class="b" id="rerun" ${!canWrite ? "disabled" : ""}>Re-run as of ${mdy(a.created_as_of)}</button>
-        <button class="b" id="pkg" ${canWrite && ["Escalated", "Referred"].includes(a.status) ? "" : "disabled title='Escalate with supervisor sign-off first'"}>Referral package</button>
+        <button class="b" id="pkg" ${canWrite && ["Escalated", "Referred"].includes(a.status) ? "" : "disabled title='Escalate with supervisor sign-off first'"}>Referral package</button></div></details>
       </div>
     </div>
+    <nav class="case-tabs" aria-label="Case sections">${["Why flagged", "Timeline", "Relationships", "Evidence", "Peers", "History"].map((label, i) => `<button class="case-tab ${i === 0 ? "active" : ""}" type="button" data-case-tab="${i}" aria-pressed="${i === 0}">${label}</button>`).join("")}</nav>
     <div id="rerunres"></div>
     <div class="grid g2" style="margin-top:16px">
       <div class="stack">
-        <div class="card"><h2>Reasons (${d.hits.length})</h2>${d.hits.map(reasonCard).join("")}</div>
-        <div class="card"><h2 style="display:flex;align-items:center;gap:8px">Agent draft (L7) <button class="b" id="agentrun" style="margin-left:auto" ${!canWrite ? "disabled" : ""}>Run agents</button></h2><div id="agent"></div></div>
-        <div class="card"><h2>Template case summary</h2><p class="small muted">Assembled from the reasons above. Use Run agents for an evidence-linked draft and QA result.</p>
+        <div class="card" data-case-panel="0"><h2>Why flagged (${d.hits.length})</h2>${d.hits.map((h) => `<div class="plain-reason"><strong>${esc(h.reason)}</strong></div>`).join("")}
+          <p class="small muted">Open Evidence for the dated source records and rule details.</p></div>
+        <div data-case-panel="0">${scoreChart(d.score_explanation)}</div>
+        <div class="card hidden" data-case-panel="3"><h2>Source evidence</h2>${d.hits.map(reasonCard).join("")}</div>
+        <div class="card hidden" data-case-panel="3"><h2 style="display:flex;align-items:center;gap:8px">Evidence-linked draft <button class="b" id="agentrun" style="margin-left:auto" ${!canWrite ? "disabled" : ""}>Run agents</button></h2><div id="agent"></div></div>
+        <div class="card hidden" data-case-panel="3"><h2>Template case summary</h2><p class="small muted">Assembled from the reasons above. Use Run agents for an evidence-linked draft and QA result.</p>
           <ol class="summary">${d.draft_summary.map((s) => `<li>${esc(s)}</li>`).join("")}</ol></div>
-        <div class="card"><h2>Activity timeline</h2>${timelineSvg(p, d.hits)}</div>
-        <div class="card"><h2>Relationship map</h2><div id="graph" class="graph"></div>${graphLegend}</div>
+        <div class="card hidden" data-case-panel="1"><h2>Activity timeline</h2>${timelineSvg(p, d.hits)}</div>
+        <div class="card hidden" data-case-panel="2"><h2>Relationship map</h2><div id="graph" class="graph"></div>${graphLegend}</div>
       </div>
       <div class="stack">
-        ${profileCard(p)}
-        ${peersCard(p)}
-        <div class="card"><h2>Coordination check</h2>${related.length ? `<p class="small">${related.length} other alerts share an address, official, or phone with this provider. Review together to avoid duplicate or conflicting actions.</p>
+        <div class="hidden" data-case-panel="3">${profileCard(p)}</div>
+        <div class="hidden" data-case-panel="4">${peersCard(p) || `<div class="card">Peer data unavailable.</div>`}</div>
+        <div class="card hidden" data-case-panel="2"><h2>Coordination check</h2>${related.length ? `<p class="small">${related.length} other alerts share an address, official, or phone with this provider. Review together to avoid duplicate or conflicting actions.</p>
           <table class="t"><tr><th>Alert</th><th>Score</th><th>Status</th><th>Shared</th></tr>${related.slice(0, 12).map((r) => `<tr class="click" data-href="#/alert/${r.alert_id}"><td class="mono">${r.alert_id}</td><td>${scoreBadge(r.score, r.tier)}</td><td>${statusTag(r.status)}</td><td class="small">${esc(String(r.via).split(":")[0].toLowerCase())}</td></tr>`).join("")}</table>${related.length > 12 ? `<p class="small muted">+${related.length - 12} more</p>` : ""}` : `<p class="small muted">No other open alerts share an address, official, or phone with this provider.</p>`}</div>
-        <div class="card"><h2>Top billed codes</h2><table class="t">${(p.top_codes || []).map((c) => `<tr><td class="mono">${esc(c.hcpcs)}</td><td class="small">${esc(c.descr || "")}</td><td><span class="chip">${esc(c.family || "")}</span></td><td style="text-align:right">${fmtN(c.lines)}</td></tr>`).join("")}</table></div>
-        <div class="card"><h2>Review history</h2>${disp ? `<table class="t"><tr><th>When (UTC)</th><th>Reviewer</th><th>Action</th><th>Supervisor</th><th>Reason</th></tr>${disp}</table>` : `<p class="small muted">No actions yet.</p>`}</div>
+        <div class="card hidden" data-case-panel="3"><h2>Top billed codes</h2><table class="t">${(p.top_codes || []).map((c) => `<tr><td class="mono">${esc(c.hcpcs)}</td><td class="small">${esc(c.descr || "")}</td><td><span class="chip">${esc(c.family || "")}</span></td><td style="text-align:right">${fmtN(c.lines)}</td></tr>`).join("")}</table></div>
+        <div class="card hidden" data-case-panel="5"><h2>Review history</h2>${disp ? `<table class="t"><tr><th>When (UTC)</th><th>Reviewer</th><th>Action</th><th>Supervisor</th><th>Reason</th></tr>${disp}</table>` : `<p class="small muted">No actions yet.</p>`}</div>
       </div>
     </div>`;
-  drawGraph(a.npi, $("#graph"));
-  loadAgent(a.alert_id);
+  document.querySelectorAll(".case-tab").forEach((tab) => tab.addEventListener("click", () => {
+    document.querySelectorAll(".case-tab").forEach((button) => { button.classList.toggle("active", button === tab); button.setAttribute("aria-pressed", String(button === tab)); });
+    document.querySelectorAll("[data-case-panel]").forEach((panel) => panel.classList.toggle("hidden", panel.dataset.casePanel !== tab.dataset.caseTab));
+    if (tab.dataset.caseTab === "2") drawGraph(a.npi, $("#graph"));
+  }));
+  $("#primary-evidence")?.addEventListener("click", () => document.querySelector('[data-case-tab="3"]').click());
+  loadAgent(a.alert_id, currentRoute);
   document.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => actionModal(a, b.dataset.act)));
   $("#rerun").addEventListener("click", async (e) => {
     e.target.disabled = true; e.target.textContent = "Re-running from archived inputs…";
@@ -350,30 +589,44 @@ function actionModal(a, act) {
       try { localStorage.setItem("npi.reviewer", body.actor); } catch {}
       $("#reviewer").value = body.actor;
       const r = await api(`/api/alerts/${a.alert_id}/disposition`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      m.classList.add("hidden"); toast(`${a.alert_id} → ${r.status}`); viewAlert(a.alert_id);
+      m.classList.add("hidden"); toast(`${a.alert_id} → ${r.status}`);
+      if (location.hash === `#/alert/${a.alert_id}`) route();
     } catch (e) { toast(e.message); }
   };
 }
 
-async function viewProvider(npi) {
+async function viewProvider(npi, currentRoute) {
   const d = await api(`/api/providers/${npi}`);
+  if (currentRoute !== routeId) return;
   const p = d.provider;
   app.innerHTML = `<p class="small"><a href="#" data-back="1">← Back</a></p>
-    <div class="card alerthead"><div><div class="small muted">Provider profile</div><h1>${esc(p.display_name || npi)}</h1>
-      <div class="muted"><span class="mono">${esc(npi)}</span> · ${esc(p.taxonomy_desc || "")} · ${esc(title(p.city))}, ${esc(p.state)}</div></div>
+    <div class="card alerthead"><div><div class="small muted">Synthetic demo provider check · source snapshot ${mdy(d.as_of)}</div><h1>${esc(p.display_name || npi)}</h1>
+      <div class="muted"><span class="mono">${esc(npi)}</span> · ${esc(p.taxonomy_desc || "")} · ${esc(title(p.city))}, ${esc(p.state)}</div>
+      <div class="finding"><strong>${esc(d.assessment.label)}</strong><p>${esc(d.assessment.sentence)}</p></div>
+      <p class="small muted">This synthetic result covers demo sources as of ${mdy(d.as_of)}. It does not verify credentials or establish wrongdoing. <a href="#/live/${esc(npi)}">Check this NPI in live NPPES ↗</a></p><button class="b" type="button" onclick="window.print()">Print / save provider check</button></div>
       <div style="margin-left:auto;text-align:right">${d.score ? scoreBadge(d.score.score, d.score.tier) : `<span class="score tier-Low">0</span><span class="tiertxt">Low</span>`}
       ${d.alert ? `<div style="margin-top:8px"><a href="#/alert/${d.alert.alert_id}">Open alert ${esc(d.alert.alert_id)} →</a></div>` : `<div class="small muted" style="margin-top:8px">No alert this run</div>`}</div></div>
-    <div class="grid g2" style="margin-top:16px"><div class="stack">
-      <div class="card"><h2>Signals (${d.hits.length})</h2>${d.hits.length ? d.hits.map(reasonCard).join("") : `<p class="muted small">No rule fired for this NPI in the latest run.</p>`}</div>
-      <div class="card"><h2>Activity timeline</h2>${timelineSvg(p, d.hits)}</div>
-      <div class="card"><h2>Relationship map</h2><div id="graph" class="graph"></div>${graphLegend}</div>
-    </div><div class="stack">${profileCard(p)}${peersCard(p)}</div></div>`;
-  drawGraph(npi, $("#graph"));
+    <nav class="case-tabs" aria-label="Provider sections">${["Summary", "Identity", "Licenses", "Exclusions", "Activity", "Evidence"].map((label, i) => `<button class="case-tab ${i === 0 ? "active" : ""}" type="button" data-provider-tab="${i}" aria-pressed="${i === 0}">${label}</button>`).join("")}</nav>
+    <div class="stack" style="margin-top:16px">
+      <section class="card" data-provider-panel="0"><h2>What we found (${d.hits.length})</h2>${d.hits.length ? d.hits.map(plainReasonCard).join("") : `<p class="muted small">No rule fired for this NPI in the latest run.</p>`}</section>
+      <div data-provider-panel="0">${d.score ? scoreChart(d.score_explanation) : ""}</div>
+      <section class="hidden" data-provider-panel="1">${profileCard(p)}<p class="small muted">This is the synthetic pilot source profile. <a href="#/live/${esc(npi)}">Open a separate live CMS NPPES lookup</a>.</p></section>
+      <section class="card hidden" data-provider-panel="2"><h2>Licenses</h2><div class="banner">Cannot check yet. State licensing sources are not connected; NPPES does not verify licenses.</div></section>
+      <section class="card hidden" data-provider-panel="3"><h2>Exclusions</h2><p>Review the dated synthetic source evidence below and confirm any possible match at the official source.</p>${(p.exclusions || []).length ? `<p>${p.exclusions.length} pilot exclusion match(es) require identity review.</p>` : `<p>No pilot exclusion match is recorded. This is not exclusion clearance.</p>`}<a href="#/live/${esc(npi)}">Check dated public OIG exact-NPI snapshot →</a></section>
+      <section class="hidden" data-provider-panel="4"><div class="card"><h2>Synthetic claim activity</h2>${timelineSvg(p, d.hits)}</div>${peersCard(p) || `<div class="card">Peer comparison unavailable.</div>`}</section>
+      <section class="hidden" data-provider-panel="5"><div class="card"><h2>Rule and source evidence</h2>${d.hits.map(reasonCard).join("") || `<p class="muted">No rule evidence in this run.</p>`}</div><div class="card" id="provider-graph"><h2>Relationship map</h2><div id="graph" class="graph"></div>${graphLegend}</div></section>
+    </div>`;
+  document.querySelectorAll("[data-provider-tab]").forEach((tab) => tab.addEventListener("click", () => {
+    document.querySelectorAll("[data-provider-tab]").forEach((button) => { button.classList.toggle("active", button === tab); button.setAttribute("aria-pressed", String(button === tab)); });
+    document.querySelectorAll("[data-provider-panel]").forEach((panel) => panel.classList.toggle("hidden", panel.dataset.providerPanel !== tab.dataset.providerTab));
+    if (tab.dataset.providerTab === "5") drawGraph(npi, $("#graph"));
+  }));
 }
 
 /* ---------------------------------------------------------------- scorecard, rules, sources, audit */
-async function viewScorecard() {
+async function viewScorecard(_arg, currentRoute) {
   const s = await api("/api/scorecard");
+  if (currentRoute !== routeId) return;
   const sweep = s.sweep || [];
   const W = 760, H = 150, L = 30;
   const xs = (i) => L + (i * (W - L - 20)) / Math.max(sweep.length - 1, 1);
@@ -405,9 +658,15 @@ async function viewScorecard() {
         <p class="small muted">Hits below the alert threshold (e.g. V-02 peer outliers) stay on the watch list by design.</p></div></div></div>`;
 }
 
-async function viewRules() {
+async function viewRules(_arg, currentRoute) {
   const { rules, scoring } = await api("/api/rules");
-  app.innerHTML = `<h1>Rule catalog</h1><p class="muted">Each rule is a versioned YAML file in <span class="mono">rules/</span> with an ID, owner, parameters, SQL, and a reason template. Reviewer dispositions become labels for tuning.</p>
+  if (currentRoute !== routeId) return;
+  const meanings = {Low:"No alert under the current synthetic rules; checked coverage still matters.", Watch:"A weaker signal to revisit as new data arrives.", Elevated:"Meets the current alert setting; review the evidence.", High:"Stronger combined signals; prioritize human review.", Critical:"At least 900 points, often from a hard-evidence rule; verify before acting."};
+  const bandRows = scoring.tiers.map((t, i) => `<tr><td>${esc(t.name)}</td><td>${fmtN(t.min)}–${fmtN((scoring.tiers[i + 1]?.min ?? 1001) - 1)}</td><td>${esc(meanings[t.name] || "Human review required")}</td></tr>`).join("");
+  app.innerHTML = `<h1>Score bands and rule catalog</h1><p class="muted">Draft definitions for NeXari review. This pilot currently has ${rules.length} implemented rules. A score orders synthetic signals for review; it does not measure the probability of wrongdoing.</p>
+    <div class="card" style="margin-bottom:16px"><h2>What the bands mean</h2><div class="tablewrap"><table class="t"><thead><tr><th>Band</th><th>Points</th><th>Plain-language meaning</th></tr></thead><tbody>${bandRows}</tbody></table></div>
+      <p class="small muted">A red rule indicator means its hard-evidence conditions were met and sets a ${scoring.hard_floor}-point floor. High and Critical score colors are prioritization cues, not judgments. The alert setting is ${scoring.alert_threshold}; changing <span class="mono">rules/scoring.yaml</span> requires a reviewed new run and does not rewrite earlier results.</p></div>
+    <p class="muted">Each rule below has a version, owner, parameters, and a plain-language reason. Reviewer decisions provide labels for later tuning.</p>
     <div class="tablewrap"><table class="t"><tr><th>ID</th><th>Signal</th><th>Type</th><th>Weight</th><th>Version</th><th>Phase</th><th>Hits</th><th>Alerts</th><th>Labels</th><th>Parameters</th></tr>
     ${rules.map((r) => `<tr><td><span class="chip ${r.type === "hard" ? "hard" : "soft"}">${esc(r.id)}</span><div class="small mono muted">${esc(r.reason_code)}</div></td>
       <td><b>${esc(r.name)}</b><div class="small muted">${esc(r.description)}</div></td><td>${esc(r.type)}</td><td>${r.type === "hard" ? "floor 900" : r.weight}</td>
@@ -421,8 +680,9 @@ async function viewRules() {
       <dt>Tiers</dt><dd>${scoring.tiers.map((t) => `${t.name} ≥ ${t.min}`).join(" · ")} · alert at ≥ ${scoring.alert_threshold}</dd></dl></div>`;
 }
 
-async function viewSources() {
+async function viewSources(_arg, currentRoute) {
   const d = await api("/api/sources");
+  if (currentRoute !== routeId) return;
   const byKey = Object.fromEntries(d.sources.map((s) => [s.key, s]));
   app.innerHTML = `<h1>Sources and lineage</h1><p class="muted">Files land write-once in the raw zone, stamped with SHA-256 and version date. Every evidence citation points back to a file, version, and row here.</p>
     <div class="tablewrap"><table class="t"><tr><th>Source</th><th>Version</th><th>File</th><th>Rows</th><th>Checks</th><th>SHA-256</th><th>Origin</th></tr>
@@ -431,8 +691,9 @@ async function viewSources() {
       <td class="mono small">${esc(l.sha256.slice(0, 16))}…</td><td class="small">${esc(byKey[l.source]?.origin || "")}</td></tr>`).join("")}</table></div>`;
 }
 
-async function viewAudit() {
+async function viewAudit(_arg, currentRoute) {
   const rows = await api("/api/audit");
+  if (currentRoute !== routeId) return;
   app.innerHTML = `<h1>Audit log</h1><p class="muted">Append-only: runs, re-runs, dispositions, and package exports. The API exposes no update or delete.</p>
     <div class="tablewrap"><table class="t"><tr><th>#</th><th>When (UTC)</th><th>Actor</th><th>Action</th><th>Object</th><th>Details</th></tr>
     ${rows.map((r) => `<tr><td>${r.seq}</td><td class="small">${esc(String(r.ts).slice(0, 19).replace("T", " "))}</td><td>${esc(r.actor)}</td><td><span class="chip">${esc(r.action)}</span></td><td class="mono small">${esc(r.object)}</td><td class="mono small" style="max-width:520px;word-break:break-all">${esc(r.details)}</td></tr>`).join("")}</table></div>`;
@@ -470,13 +731,15 @@ function agentCard(r) {
       <pre class="small mono" style="white-space:pre-wrap">${esc(JSON.stringify(r.trace, null, 1))}</pre></details>
     <p class="small muted">Draft only. Agents cannot change an alert's status; a reviewer decides and signs.</p>`;
 }
-async function loadAgent(alertId) {
+async function loadAgent(alertId, currentRoute) {
   const box = $("#agent");
-  if (!box) return;
-  try { box.innerHTML = agentCard(await api(`/api/alerts/${alertId}/draft`)); } catch (e) { box.innerHTML = agentCard(null); }
-  $("#agentrun").onclick = async (ev) => {
+  const runButton = $("#agentrun");
+  if (!box || !runButton) return;
+  try { const draft = await api(`/api/alerts/${alertId}/draft`); if (currentRoute !== routeId) return; box.innerHTML = agentCard(draft); }
+  catch (e) { if (currentRoute !== routeId) return; box.innerHTML = agentCard(null); }
+  runButton.onclick = async (ev) => {
     ev.target.disabled = true; ev.target.textContent = "Agents working…";
-    try { box.innerHTML = agentCard(await api(`/api/alerts/${alertId}/draft?actor=${encodeURIComponent(reviewer() || "reviewer")}`, { method: "POST" })); }
+    try { const draft = await api(`/api/alerts/${alertId}/draft?actor=${encodeURIComponent(reviewer() || "reviewer")}`, { method: "POST" }); if (currentRoute === routeId) box.innerHTML = agentCard(draft); }
     catch (e) { toast(e.message); }
     ev.target.disabled = false; ev.target.textContent = "Run agents";
   };
