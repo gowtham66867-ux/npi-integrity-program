@@ -29,8 +29,8 @@ def verify_typesafe_billing(policy: dict, now: datetime | None = None) -> None:
         not isinstance(c, str) or len(c) != 4 or not c.isdigit() for c in cards
     ):
         raise ValueError("all active TypeSafe payment methods must be recorded by last four digits")
-    if policy.get("primary_card_last4") != "8192" or "8192" not in cards or "6022" in cards:
-        raise ValueError("TypeSafe primary card must be 8192 and card 6022 must be absent")
+    if policy.get("primary_card_last4") != "8192" or cards != ["8192"]:
+        raise ValueError("8192 must be the only active TypeSafe payment method")
     try:
         verified = datetime.fromisoformat(policy["verified_at"].replace("Z", "+00:00"))
     except (KeyError, TypeError, ValueError) as exc:

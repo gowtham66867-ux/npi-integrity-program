@@ -15,6 +15,7 @@ uv venv --python 3.11 && uv pip install -e ".[dev]"
 Other commands: `synth`, `run --as-of YYYY-MM-DD`, `scorecard --sweep`, `rerun <alert_id>`, `fetch <source>`.
 Tests: `.venv/bin/python -m pytest -q tests` (end to end, about 20 s).
 `scripts/release_check.py` runs the tests and offline evaluation gates and writes a reviewable report.
+The [console test plan](tests/CONSOLE_TEST_PLAN.md) maps automated cases and deployed-browser acceptance checks to the Clinic and Government journeys.
 GitHub Actions regenerates the synthetic demo and runs that release harness on every push and pull request.
 
 DuckDB allows one writer per file, so stop the console before running `run` or `demo`.
@@ -101,7 +102,7 @@ The evals found and fixed three real issues:
 
 ## Deployment
 
-The private console is deployed at [npi-console](https://npi-console-1056643263413.us-central1.run.app/) in GCP project `texmed-npi-integrity` for `gowtham@texmed.us`. Direct IAP protects the service; Firestore stores reviewer actions and agent drafts. The October 7 release passed 141 tests and all 16 offline evaluation gates, and a signed-in browser smoke test verified a review action and draft persisted in Firestore. Use `scripts/release_check.py` and `deploy/deploy_gcp.sh --dry-run` before subsequent releases. The [billing policy](deploy/billing_policy.json) pins primary card **8192** and forbids **6022**; card digits require a fresh manual check in Google Cloud before each release. See [deployment instructions](deploy/README.md). A passing synthetic run is not a real-world accuracy claim.
+The private console is deployed at [npi-console](https://npi-console-1056643263413.us-central1.run.app/) in GCP project `texmed-npi-integrity` for `gowtham@texmed.us`. Direct IAP protects the service; Firestore stores reviewer actions and agent drafts. The October 7 release passed 141 tests and all 16 offline evaluation gates, and a signed-in browser smoke test verified a review action and draft persisted in Firestore. Use `scripts/release_check.py` and `deploy/deploy_gcp.sh --dry-run` before subsequent releases. The [billing policy](deploy/billing_policy.json) pins the TexMed project and linked company billing account, while the account owner manages its payment method. See [deployment instructions](deploy/README.md). A passing synthetic run is not a real-world accuracy claim.
 
 **PHI restriction:** This is a public/synthetic pilot and is not approved to receive PHI. The [HIPAA readiness assessment](deploy/HIPAA_READINESS.md) lists the verified technical controls and the contracts, risk analysis, operational controls, and production architecture required before any PHI use.
 
@@ -120,3 +121,67 @@ The private console is deployed at [npi-console](https://npi-console-10566432634
 5. Rule weights are placeholders for NeXari to set (open question 3 in the doc). The dispositions table already records the labels for tuning.
 6. Broader adversarial and independent real-data validation beyond the current synthetic tests.
 7. React front end if wanted; the current console is plain JS with no build step.
+
+# Task-focused console pilot
+
+The console now opens on a Clinic / Facility home page with provider search,
+field-level NPPES comparison, a one-click synthetic sample, and a saved
+user-scoped synthetic directory with manual recheck. Exact NPI
+searches and the comparison form now make a read-only request to the official
+NPPES Registry API v2.1. The result is labeled live, includes the Registry
+record's update date and link, and is never joined to synthetic scores, alerts,
+claims, or the synthetic roster. Name searches and the existing provider/case
+pages still use the synthetic demo. The API lookup is one NPI at a time and is
+not a substitute for the monthly full file, weekly increments, or deactivation
+report; those real-file connectors have not been ingested into this deployment.
+An NPI Registry result does not establish licensing, credentialing, enrollment,
+or exclusion clearance. Reviewer
+and supervisor roles can switch to a Government lead queue; the server checks
+that role for `/api/government/leads`. Provider and case pages lead with a
+qualified finding, then reveal source evidence and technical detail. Rules,
+Sources, Scorecard, and Audit live under Methodology & Admin.
+
+The directory endpoint accepts at most 100 unique, checksum-valid NPIs and
+persists only those NPIs and synthetic check results per signed-in user in
+Firestore. Users can recheck manually, see status changes, and delete their
+directory. Scheduled checks and notifications are not enabled. Verification
+compares the published street address, ZIP, city, state, name, and taxonomy;
+entered values are not stored. Licensing returns “Cannot check yet” until a
+separate source is connected. See
+[implementation status](docs/UX_IMPLEMENTATION_2026-10-20.md) for the exact
+scope and remaining gaps.
+
+The live provider page also shows a **dated HHS-OIG LEIE exact-NPI snapshot**,
+built from the public `UPDATED.csv` download. Its minimal packaged index keeps
+only rows publishing a 10-digit NPI and excludes DOB and street addresses.
+Most LEIE rows do not publish an NPI, so an absent exact match is **not
+exclusion clearance**. A published NPI match requires confirmation in OIG's
+official online search; it is not a fraud determination. The page displays
+OIG update date, download time, source hash, coverage, and a stale warning
+45 days after the OIG update. Run
+`.venv/bin/python -m scripts.sync_leie` to refresh the reviewed snapshot before
+a release. The [public-data test cases](tests/PUBLIC_DATA_TEST_CASES.md) cover
+the new source and the remaining real-data integrations.
+These pilot features do not establish clinic tenant or government jurisdiction
+isolation. Keep access limited to the existing internal synthetic pilot. Do not
+use actual patient information or treat “No flagged signals” as credential
+clearance. Tenant membership, jurisdiction-scoped queries, roster persistence,
+notifications, and attestation exports require a separate data-boundary design
+before onboarding external users.
+
+## NeXari October 13 feedback update
+
+The clinic UI now calls the one-time synthetic list check **Directory**. Case,
+provider, OIG, agent-summary, and referral copy asks for human verification
+and avoids accusatory results. Provider and case pages explain the stored
+synthetic score with a chart reconstructed from the scoring configuration
+archived with that run; a mismatch suppresses the chart. Methodology shows
+plain-language definitions for all five bands and lists the 18 rules actually
+implemented. The alert threshold remains a versioned `rules/scoring.yaml`
+setting; changing it requires a reviewed new run and does not retroactively
+relabel old cases. See the [feedback response](docs/NEXARI_FEEDBACK_2026-10-13.md)
+and [acceptance cases](tests/NEXARI_FEEDBACK_TEST_CASES.md).
+
+Individual provider subscriptions, paid notifications, a public internet
+watchlist, and state/social-source agents are proposed work. They are not
+represented as active feeds or monitoring in this pilot.
