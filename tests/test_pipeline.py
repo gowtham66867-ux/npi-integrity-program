@@ -344,7 +344,23 @@ def test_roster_preserves_row_order_and_never_claims_unknown_npi_is_clear(client
     assert [x["npi"] for x in body["results"]] == [known, unknown]
     assert body["results"][0]["label"] == tc.get(f"/api/providers/{known}").json()["assessment"]["label"]
     assert body["results"][1]["label"] == "Cannot check yet"
-    assert body["saved"] is False and "No roster is stored" in body["note"]
+    assert body["saved"] is False and "No directory is stored" in body["note"]
+
+
+def test_downloadable_sample_directory_checks_successfully(client, monkeypatch):
+    tc, api = client
+    monkeypatch.setenv("NPI_DATA_MODE", "synthetic")
+    response = tc.get("/static/sample-directory.csv")
+    assert response.status_code == 200
+    lines = response.text.strip().splitlines()
+    assert lines[0] == "npi"
+    npis = lines[1:]
+    assert npis and len(npis) == len(set(npis))
+    assert all(api.npi_valid(npi) for npi in npis)
+    checked = tc.post("/api/roster/check", json={"npis": npis})
+    assert checked.status_code == 200
+    assert [row["npi"] for row in checked.json()["results"]] == npis
+    assert all(row["label"] != "Cannot check yet" for row in checked.json()["results"])
 
 
 @pytest.mark.parametrize("npis,expected", [

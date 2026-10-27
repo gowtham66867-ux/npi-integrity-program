@@ -478,9 +478,9 @@ class RosterInput(BaseModel):
 @app.post("/api/roster/check")
 def check_roster(body: RosterInput):
     if os.environ.get("NPI_DATA_MODE", "local_demo") not in ("local_demo", "synthetic"):
-        raise HTTPException(403, "roster checking is limited to the synthetic pilot")
+        raise HTTPException(403, "directory checking is limited to the synthetic pilot")
     if len(set(body.npis)) != len(body.npis) or any(not npi_valid(n) for n in body.npis):
-        raise HTTPException(400, "Roster requires unique, valid 10-digit NPIs")
+        raise HTTPException(400, "Directory requires unique, valid 10-digit NPIs")
     cur = db()
     rid = current_run(cur)
     results = []
@@ -494,7 +494,7 @@ def check_roster(body: RosterInput):
         assessment = provider_assessment(s, hits, p["status"])
         results.append({"npi": npi, "name": p["display_name"], "label": assessment["label"],
                         "reason": assessment["sentence"]})
-    return {"results": results, "saved": False, "note": "One-time synthetic pilot check. No roster is stored or monitored."}
+    return {"results": results, "saved": False, "note": "One-time synthetic pilot check. No directory is stored or monitored."}
 
 
 def _directory_owner(request: Request) -> str:

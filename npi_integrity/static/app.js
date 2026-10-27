@@ -9,6 +9,7 @@ const scoreBadge = (score, tier) => `<span class="score tier-${esc(tier)}">${esc
 const statusTag = (s) => `<span class="status ${esc(String(s).replace(" ", "-"))}">${esc(s)}</span>`;
 const chips = (ids, hl, cls = "hard") => (ids || []).map((r) => `<span class="chip ${hl && hl.has(r) ? cls : ""}">${esc(r)}</span>`).join("");
 const HARD_RULES = new Set(["D-01", "D-02", "D-03", "D-04", "D-05", "D-06", "D-07"]);
+const REVIEW_DISCLAIMER = "This is a prompt to check, not a finding of wrongdoing. You decide.";
 
 let SESSION = {actor: null, role: "local_demo", modes: ["clinic", "government"]};
 let MODE = "clinic";
@@ -47,7 +48,7 @@ function coveragePanel() {
   return `<section class="card coverage-card" aria-label="Data coverage and availability"><div class="section-head"><div><div class="eyebrow">Data coverage</div><h2>What can be checked now</h2></div><a href="#/sources">Pilot file lineage →</a></div>
     <div class="coverage-grid"><div><span class="coverage-dot live"></span><strong>CMS NPPES</strong><p>Live, one exact NPI on demand. Identity, taxonomy and published address only.</p></div>
     <div><span class="coverage-dot ${leie.status === "stale" || leie.status === "unavailable" ? "warn" : "dated"}"></span><strong>OIG LEIE</strong><p>${esc(leieText)}. Name-only rows are not checked.</p></div>
-    <div><span class="coverage-dot demo"></span><strong>Activity and scoring</strong><p>Synthetic claims through ${mdy(SUMMARY.claims.hi)}. No live claim-level feed or fraud finding.</p></div>
+    <div><span class="coverage-dot demo"></span><strong>Activity and scoring</strong><p>Synthetic claims through ${mdy(SUMMARY.claims.hi)}. Scores prompt human review; they do not determine wrongdoing.</p></div>
     <div><span class="coverage-dot off"></span><strong>Additional live sources</strong><p>Medicare activity, state licenses and social signals are not connected.</p></div></div></section>`;
 }
 async function loadSummary() {
@@ -81,7 +82,7 @@ async function loadSummary() {
 }
 
 /* ---------------------------------------------------------------- router */
-const routes = { home: viewHome, live: viewLiveNppes, verify: viewVerify, roster: viewRoster, leads: viewLeads, methodology: viewMethodology,
+const routes = { home: viewHome, live: viewLiveNppes, verify: viewVerify, directory: viewRoster, roster: viewRoster, leads: viewLeads, methodology: viewMethodology,
   queue: viewQueue, watch: viewWatch, alert: viewAlert, provider: viewProvider, scorecard: viewScorecard, rules: viewRules, sources: viewSources, audit: viewAudit };
 let routeId = 0;
 async function route() {
@@ -125,7 +126,7 @@ async function viewHome(_arg, currentRoute) {
     <p class="small"><a href="#/provider/1136934696">Try a synthetic sample: Gregory N Darick, NPI 1136934696 →</a></p></section>
     <div class="journeys"><a class="journey card" href="#/home" id="focus-search"><strong>Check a provider →</strong><span>See current signals and the dated evidence.</span></a>
       <a class="journey card" href="#/verify"><strong>Verify our information →</strong><span>Compare your fields with a live NPPES record.</span></a>
-      <a class="journey card" href="#/roster"><strong>Monitor my directory →</strong><span>Save up to 100 synthetic NPIs and recheck them manually.</span></a></div>
+      <a class="journey card" href="#/directory"><strong>Monitor my directory →</strong><span>Save up to 100 synthetic NPIs and recheck them manually.</span></a></div>
     ${coveragePanel()}
     <section class="card home-review"><div class="section-head"><div><div class="eyebrow">Synthetic review workbench</div><h2>${fmtN(items.filter((a) => OPEN.has(a.status)).length)} open cases</h2></div><a href="#/queue">Open case queue →</a></div>
       ${first ? `<a class="featured-case" href="#/alert/${esc(first.alert_id)}"><span><b>${esc(first.display_name || first.npi)}</b><span class="small muted">${esc(first.top_reason || "View evidence")}</span></span><span>${statusTag(first.status)}<small>${esc(nextReviewStep(first))} →</small></span></a>` : `<p class="muted">No current alerts.</p>`}
@@ -196,7 +197,7 @@ async function viewVerify(_arg, currentRoute) {
     try {
       const result = await api("/api/verify", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
       if (currentRoute !== routeId) return;
-      resultBox.innerHTML = `<div class="card result-card print-area"><h2>Comparison for NPI ${esc(result.npi)}</h2><p class="small muted">${esc(result.source)} · record updated ${mdy(result.last_updated)} · retrieved ${esc(result.retrieved_at || "time unavailable")}. ${esc(result.note)} <a href="${esc(result.source_url)}" target="_blank" rel="noopener noreferrer">Open CMS record ↗</a></p>
+      resultBox.innerHTML = `<div class="card result-card print-area"><h2>Comparison for NPI ${esc(result.npi)}</h2><p class="small muted">${esc(result.source)} · record updated ${mdy(result.last_updated)} · retrieved ${esc(result.retrieved_at || "time unavailable")}. ${esc(result.note)} <a href="${esc(result.source_url)}" target="_blank" rel="noopener noreferrer">Open CMS record ↗</a></p><p class="small muted">${REVIEW_DISCLAIMER}</p>
         <button class="b print-action" type="button" onclick="window.print()">Print / save PDF</button>
         <div class="tablewrap"><table class="t"><thead><tr><th>Field</th><th>You entered</th><th>Source record</th><th>Result</th></tr></thead><tbody>${result.fields.map((f) => `<tr><td>${esc(f.field)}</td><td>${esc(f.entered || "—")}</td><td>${esc(f.official || "Unavailable")}</td><td><strong>${esc(f.result)}</strong></td></tr>`).join("")}</tbody></table></div></div>`;
     } catch (err) { if (currentRoute === routeId) resultBox.innerHTML = `<div class="banner" role="alert">${esc(err.message)}</div>`; }
@@ -205,7 +206,7 @@ async function viewVerify(_arg, currentRoute) {
 
 async function viewRoster(_arg, currentRoute) {
   app.innerHTML = `<h1>My synthetic directory</h1><div class="banner">Save only pilot NPIs. Rechecks are manual; scheduled checks and notifications are not enabled. Upload a CSV with exactly one column named <b>npi</b>; do not include patient or clinic data.</div>
-    <form id="roster-form" class="card"><label for="roster-file">Synthetic NPI directory CSV (up to 100 rows)</label><input id="roster-file" type="file" accept=".csv,text/csv" required><button class="b primary">Save and check directory</button></form>
+    <form id="roster-form" class="card"><label for="roster-file">Synthetic NPI directory CSV (up to 100 rows)</label><p class="small muted">The file needs one column named <b>npi</b>, with one 10-digit NPI per row. <a href="/static/sample-directory.csv" download="sample-directory.csv">Download a sample CSV</a>.</p><input id="roster-file" type="file" accept=".csv,text/csv" required><button class="b primary">Save and check directory</button></form>
     <div id="roster-results" aria-live="polite"></div>`;
   const resultBox = $("#roster-results");
   const rosterForm = $("#roster-form");
@@ -219,7 +220,7 @@ async function viewRoster(_arg, currentRoute) {
       <p>${(result.changes || []).length ? `${result.changes.length} changed result(s) since the previous check.` : "No result-status changes since the previous check."}</p>
       <div class="print-action"><button class="b" id="directory-recheck">Recheck now</button> <button class="b" onclick="window.print()">Print / save attestation</button> <button class="b danger" id="directory-delete">Delete directory</button></div>
       <div class="tablewrap"><table class="t"><thead><tr><th>NPI</th><th>Provider</th><th>Result</th><th>Why</th></tr></thead><tbody>${result.results.map((row) => `<tr><td><a href="#/provider/${esc(row.npi)}">${esc(row.npi)}</a></td><td>${esc(row.name)}</td><td>${esc(row.label)}</td><td>${esc(row.reason)}</td></tr>`).join("")}</tbody></table></div>
-      <p class="small muted">Attestation of a completed synthetic pilot check only. This is not credential or exclusion clearance.</p></div>`;
+      <p class="small muted">Attestation of a completed synthetic pilot check only. This is not credential or exclusion clearance. ${REVIEW_DISCLAIMER}</p></div>`;
     $("#directory-recheck", resultBox).onclick = async () => { try { renderDirectory(await api("/api/directory/recheck", {method:"POST"})); } catch (e) { if (currentRoute === routeId) toast(e.message); } };
     $("#directory-delete", resultBox).onclick = async () => { if (!confirm("Delete your saved synthetic directory?")) return; try { await api("/api/directory", {method:"DELETE"}); renderDirectory({saved:false}); } catch (e) { if (currentRoute === routeId) toast(e.message); } };
   };
@@ -243,7 +244,7 @@ async function viewLeads(_arg, currentRoute) {
   const items = await api("/api/government/leads");
   if (currentRoute !== routeId) return;
   const view = document.createElement("div");
-  view.innerHTML = `<div class="eyebrow">Government · synthetic pilot</div><h1>Review workbench</h1><p class="muted">Work through potential anomalies, verify cited evidence, then record a disposition. Scores prioritize review; they are not fraud probabilities.</p>
+  view.innerHTML = `<div class="eyebrow">Government · synthetic pilot</div><h1>Review workbench</h1><p class="muted">Work through potential anomalies, verify cited evidence, then record a disposition. Scores prioritize review; they do not determine wrongdoing.</p>
     <div class="kpis"><div class="kpi"><div class="v">${fmtN(items.filter((a) => OPEN.has(a.status)).length)}</div><div class="l">Open leads</div></div>
       <div class="kpi"><div class="v">${fmtN(items.filter((a) => a.status === "New").length)}</div><div class="l">Awaiting first review</div></div>
       <div class="kpi"><div class="v">${fmtN(items.filter((a) => a.status === "In review").length)}</div><div class="l">Evidence review underway</div></div>
@@ -501,7 +502,7 @@ async function viewAlert(id, currentRoute = routeId) {
   const related = d.related.filter((r) => r.alert_id !== a.alert_id);
   app.innerHTML = `
     <p class="small"><a href="${MODE === "government" ? "#/leads" : "#/queue"}">← ${MODE === "government" ? "Leads" : "Alerts"}</a></p>
-    <div class="banner"><b>Potential anomaly for human review.</b> Verify the evidence before making a decision. Reasons below are tied to the exact source file, version, and row.</div>
+    <div class="banner"><b>Potential anomaly for human review.</b> ${REVIEW_DISCLAIMER} Verify the evidence before making a decision. Reasons below are tied to the exact source file, version, and row.</div>
     <div class="review-path card" aria-label="Case review steps"><div><span>1</span><strong>Check identity</strong><small>Confirm the NPI in <a href="#/live/${esc(a.npi)}">live NPPES</a>.</small></div>
       <div><span>2</span><strong>Review evidence</strong><small>Inspect the dated files and synthetic activity in the Evidence tab.</small></div>
       <div><span>3</span><strong>Record a decision</strong><small>${esc(nextReviewStep(a))}. Case status: ${esc(a.status)}.</small></div></div>
@@ -661,10 +662,10 @@ async function viewScorecard(_arg, currentRoute) {
 async function viewRules(_arg, currentRoute) {
   const { rules, scoring } = await api("/api/rules");
   if (currentRoute !== routeId) return;
-  const meanings = {Low:"No alert under the current synthetic rules; checked coverage still matters.", Watch:"A weaker signal to revisit as new data arrives.", Elevated:"Meets the current alert setting; review the evidence.", High:"Stronger combined signals; prioritize human review.", Critical:"At least 900 points, often from a hard-evidence rule; verify before acting."};
-  const bandRows = scoring.tiers.map((t, i) => `<tr><td>${esc(t.name)}</td><td>${fmtN(t.min)}–${fmtN((scoring.tiers[i + 1]?.min ?? 1001) - 1)}</td><td>${esc(meanings[t.name] || "Human review required")}</td></tr>`).join("");
+  const meanings = {Low:["No pilot alert", "No alert under the current synthetic rules; checked coverage still matters.", "Continue routine checks as new source data arrives."], Watch:["Keep an eye on", "A weaker signal to revisit as new data arrives.", "Recheck when the source updates."], Elevated:["Take a look", "Meets the current alert setting; review the evidence.", "Open the case and compare its source records."], High:["Act soon", "Stronger combined signals need priority review.", "Assign a reviewer and verify the cited source."], Critical:["Act now", "A strong signal needs prompt human review.", "Verify identity and source evidence before any operational decision."]};
+  const bandRows = scoring.tiers.map((t, i) => `<tr><td><strong>${esc(meanings[t.name]?.[0] || t.name)}</strong><div class="small muted">${esc(t.name)} in technical detail</div></td><td>${fmtN(t.min)}–${fmtN((scoring.tiers[i + 1]?.min ?? 1001) - 1)}</td><td>${esc(meanings[t.name]?.[1] || "Human review required")}</td><td>${esc(meanings[t.name]?.[2] || "Review the evidence.")}</td></tr>`).join("");
   app.innerHTML = `<h1>Score bands and rule catalog</h1><p class="muted">Draft definitions for NeXari review. This pilot currently has ${rules.length} implemented rules. A score orders synthetic signals for review; it does not measure the probability of wrongdoing.</p>
-    <div class="card" style="margin-bottom:16px"><h2>What the bands mean</h2><div class="tablewrap"><table class="t"><thead><tr><th>Band</th><th>Points</th><th>Plain-language meaning</th></tr></thead><tbody>${bandRows}</tbody></table></div>
+    <div class="card" style="margin-bottom:16px"><h2>What the bands mean</h2><div class="tablewrap"><table class="t"><thead><tr><th>Plain-language status</th><th>Points</th><th>Meaning</th><th>Next step</th></tr></thead><tbody>${bandRows}</tbody></table></div>
       <p class="small muted">A red rule indicator means its hard-evidence conditions were met and sets a ${scoring.hard_floor}-point floor. High and Critical score colors are prioritization cues, not judgments. The alert setting is ${scoring.alert_threshold}; changing <span class="mono">rules/scoring.yaml</span> requires a reviewed new run and does not rewrite earlier results.</p></div>
     <p class="muted">Each rule below has a version, owner, parameters, and a plain-language reason. Reviewer decisions provide labels for later tuning.</p>
     <div class="tablewrap"><table class="t"><tr><th>ID</th><th>Signal</th><th>Type</th><th>Weight</th><th>Version</th><th>Phase</th><th>Hits</th><th>Alerts</th><th>Labels</th><th>Parameters</th></tr>

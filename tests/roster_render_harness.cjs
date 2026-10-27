@@ -27,6 +27,7 @@ const context = {
   api: () => new Promise((resolve) => { resolveRequest = resolve; }),
   $: (selector, root = app) => root.querySelector(selector),
   esc: (value) => String(value ?? ''), mdy: (value) => value,
+  REVIEW_DISCLAIMER: 'This is a prompt to check, not a finding of wrongdoing. You decide.',
   toast: () => {}, confirm: () => false,
 };
 vm.createContext(context);

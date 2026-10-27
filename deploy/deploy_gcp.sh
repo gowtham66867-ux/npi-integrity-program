@@ -60,5 +60,9 @@ gc run services add-iam-policy-binding "$SERVICE" --region "$REGION" \
   --member="serviceAccount:service-$NUMBER@gcp-sa-iap.iam.gserviceaccount.com" --role=roles/run.invoker
 gc beta iap web add-iam-policy-binding --region "$REGION" --resource-type=cloud-run --service "$SERVICE" \
   --member="user:$ACCOUNT" --role=roles/iap.httpsResourceAccessor
+for VIEWER in lester@texmed.us kashif@texmed.us; do
+  gc beta iap web add-iam-policy-binding --region "$REGION" --resource-type=cloud-run --service "$SERVICE" \
+    --member="user:$VIEWER" --role=roles/iap.httpsResourceAccessor
+done
 gc run services describe "$SERVICE" --region "$REGION" --format='value(status.url)'
 echo "Service deployed privately. Authenticated smoke tests and Firestore persistence verification are required before acceptance."
